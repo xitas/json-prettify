@@ -1,0 +1,64 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>JSON Formatter</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="style.css">
+
+<main class="app">
+  <header class="top">
+    <h1>JSON Formatter</h1>
+    <p>Beautify, minify and validate JSON. Everything runs in this page, so your data stays on your device.</p>
+  </header>
+
+  <div class="toolbar" role="toolbar" aria-label="JSON actions">
+    <div class="group">
+      <button id="btnFormat" class="primary active" type="button" title="Beautify with indentation (Ctrl/Cmd + Enter)">Format</button>
+      <button id="btnMinify" type="button" title="Remove all whitespace">Minify</button>
+      <button id="btnValidate" type="button" title="Check the input and report any error">Validate</button>
+    </div>
+    <div class="group">
+      <label class="field" for="indent">Indent
+        <select id="indent">
+          <option value="2" selected>2 spaces</option>
+          <option value="4">4 spaces</option>
+          <option value="tab">Tab</option>
+        </select>
+      </label>
+      <label class="check" for="sortKeys"><input type="checkbox" id="sortKeys"> Sort keys</label>
+    </div>
+    <div class="spacer"></div>
+    <div class="group">
+      <button id="btnSample" type="button">Load sample</button>
+      <label class="file-btn" for="fileIn">Open file<input type="file" id="fileIn" accept=".json,application/json,text/plain"></label>
+      <button id="btnClear" type="button">Clear</button>
+    </div>
+  </div>
+
+  <div id="status" class="status" role="status" aria-live="polite" data-state="empty">
+    <span class="pill">Ready</span><span class="msg">Paste JSON on the left to begin.</span>
+  </div>
+
+  <div class="panes">
+    <section class="pane" aria-label="Input">
+      <div class="pane-head">
+        <label class="title" for="input">Input</label>
+        <span id="inMeta" class="meta"></span>
+      </div>
+      <textarea id="input" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" placeholder="Paste or type JSON here"></textarea>
+    </section>
+    <section class="pane" aria-label="Result">
+      <div class="pane-head">
+        <span class="title" id="outTitle">Formatted</span>
+        <span id="outMeta" class="meta"></span>
+        <div class="actions">
+          <button id="btnCopy" type="button">Copy</button>
+          <button id="btnUse" type="button" title="Replace the input with this result">Use as input</button>
+        </div>
+      </div>
+      <pre id="output" tabindex="0" aria-labelledby="outTitle"><code id="outCode"></code></pre>
+    </section>
+  </div>
+</main>
+<script src="script.js" defer></script>
+</body>
+</html>
