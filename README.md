@@ -50,12 +50,6 @@ Then visit `http://localhost:8000`.
 3. Click **Validate** to check the input. Errors show the line and column.
 4. Click **Copy** to copy the result.
 
-## Deploy with GitHub Pages
-
-1. Push the project to GitHub.
-2. Go to **Settings → Pages**.
-3. Under **Build and deployment**, choose **Deploy from a branch**, select `main` and `/ (root)`, then save.
-4. Your site will be live at `https://<your-username>.github.io/<your-repo>/`.
 
 ## Notes
 
