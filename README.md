@@ -2,6 +2,8 @@
 
 A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste your JSON to beautify, minify and validate it right in the browser. No frameworks, no build step, and nothing is uploaded anywhere.
 
+**Live demo:** [https://xitas.github.io/json-prettify/](https://xitas.github.io/json-prettify/)
+
 ## Features
 
 - **Format / beautify** JSON with 2-space, 4-space or tab indentation
@@ -26,7 +28,7 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 
 ## Getting started
 
-No installation needed.
+No installation needed. You can use the [live demo](https://xitas.github.io/json-prettify/) or run it locally.
 
 1. Clone the repository:
    ```bash
@@ -49,7 +51,6 @@ Then visit `http://localhost:8000`.
 2. Click **Format** to beautify or **Minify** to compress.
 3. Click **Validate** to check the input. Errors show the line and column.
 4. Click **Copy** to copy the result.
-
 
 ## Notes
 
