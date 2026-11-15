@@ -12,8 +12,9 @@
 :root,
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #ffffff;
-  --surface: #ffffff;
+  --bg: #f3f3f3;                /* page */
+  --surface: #ffffff;           /* workspace card, buttons */
+  --well: #f8f8f8;              /* panes and status bar inside the card */
   --surface-2: #f2f2f2;         /* pane headers, hovered buttons, segmented track */
   --surface-3: #e3e3e3;         /* pressed buttons */
   --fg: #1f1f1f;                /* body text: soft charcoal, not pure black */
@@ -28,9 +29,8 @@
   --selection-fg: #ffffff;
   --scroll-thumb: #b0b0b0;
   --scroll-thumb-hover: #808080;
-  --scroll-track: #ffffff;
-  --shadow-sm: 0 1px 2px rgba(31, 31, 31, 0.06);
-  --shadow: 0 1px 2px rgba(31, 31, 31, 0.05), 0 4px 16px rgba(31, 31, 31, 0.05);
+  --scroll-track: #f8f8f8;
+  --card-shadow: 0 1px 2px rgba(31, 31, 31, 0.04), 0 8px 24px rgba(31, 31, 31, 0.06);
   --syn-key: #1f1f1f;           /* bold */
   --syn-str: #333333;           /* regular */
   --syn-num: #595959;           /* mid-gray */
@@ -42,7 +42,8 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
   --bg: #1c1c1c;                /* page: soft charcoal */
-  --surface: #282828;           /* panels, one step lighter than the page */
+  --surface: #282828;           /* workspace card, one step lighter than the page */
+  --well: #222222;              /* panes and status bar, one step darker than the card */
   --surface-2: #323232;         /* pane headers, hovered buttons */
   --surface-3: #3d3d3d;         /* pressed buttons */
   --fg: #e8e8e8;                /* off-white text */
@@ -57,9 +58,9 @@
   --selection-fg: #1c1c1c;
   --scroll-thumb: #4d4d4d;
   --scroll-thumb-hover: #737373;
-  --scroll-track: #282828;
-  --shadow-sm: 0 1px 2px rgba(12, 12, 12, 0.35);
-  --shadow: 0 1px 2px rgba(12, 12, 12, 0.35), 0 4px 16px rgba(12, 12, 12, 0.3);
+  --scroll-track: #222222;
+  /* Dark mode relies on the lighter card and its border; the shadow is only a hint */
+  --card-shadow: 0 1px 2px rgba(12, 12, 12, 0.25);
   --syn-key: #f0f0f0;
   --syn-str: #d6d6d6;
   --syn-num: #b0b0b0;
@@ -90,6 +91,7 @@
 
   /* Shape and sizing */
   --radius: 8px;
+  --radius-lg: 12px;            /* workspace card: 12 outside, 8 inside */
   --radius-pill: 999px;
   --control-h: 40px;
   --control-h-sm: 32px;
@@ -409,16 +411,26 @@ kbd {
 
 /* ---------- Toolbar ---------- */
 
+/* ---------- Workspace card (toolbar, status, panes) ---------- */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--card-shadow);
+}
+
+/* ---------- Toolbar (sits directly on the card, no box of its own) ---------- */
+
 .toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-3);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
 }
 .group {
   display: flex;
@@ -449,8 +461,7 @@ kbd {
   padding: var(--space-2) var(--space-4);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
+  background: var(--well);
   transition: border-color var(--dur) var(--ease);
 }
 .status .pill {
@@ -536,16 +547,16 @@ kbd {
 .panes {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-5);
+  gap: var(--space-4);
 }
+/* Panes are inset wells inside the card: own background and border, no shadow */
 .pane {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--surface);
+  background: var(--well);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  box-shadow: var(--shadow);
   overflow: hidden;
   transition: border-color var(--dur) var(--ease);
 }
@@ -560,7 +571,7 @@ kbd {
   min-height: 52px;
   padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
   border-bottom: 1px solid var(--line);
-  background: var(--surface-2);
+  background: var(--well);
 }
 .pane-head .title {
   font-size: var(--text-xs);
@@ -575,6 +586,7 @@ kbd {
 .pane-head .actions {
   display: flex;
   gap: var(--space-2);
+  margin-left: auto;            /* stays right-aligned when it wraps on phones */
 }
 .pane-body {
   position: relative;
@@ -596,7 +608,7 @@ pre {
   tab-size: 2;
   color: var(--fg);
   caret-color: var(--fg);
-  background: var(--surface);
+  background: var(--well);
   white-space: pre;
   overflow: auto;
   resize: none;
@@ -728,11 +740,17 @@ pre::-webkit-scrollbar-thumb:hover {
   body {
     padding-top: max(var(--space-5), env(safe-area-inset-top, 0px));
     padding-bottom: max(var(--space-6), env(safe-area-inset-bottom, 0px));
-    padding-left: max(var(--space-4), env(safe-area-inset-left, 0px));
-    padding-right: max(var(--space-4), env(safe-area-inset-right, 0px));
+    padding-left: max(var(--space-3), env(safe-area-inset-left, 0px));
+    padding-right: max(var(--space-3), env(safe-area-inset-right, 0px));
   }
   .app {
     gap: var(--space-4);
+  }
+  .card {
+    padding: var(--space-4);
+  }
+  .top {
+    padding: 0 var(--space-1);
   }
   h1 {
     font-size: 26px;

@@ -46,102 +46,104 @@
     </button>
   </header>
 
-  <div class="toolbar" role="group" aria-label="JSON actions">
-    <div class="group group-actions">
-      <div class="segmented" role="group" aria-label="Output mode">
-        <button id="btnFormat" class="active" type="button" aria-pressed="true" title="Beautify with indentation (Ctrl/Cmd + Enter)">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h16M8 12h12M8 18h12M4 12h.01M4 18h.01"/></svg>
-          <span>Format</span>
-        </button>
-        <button id="btnMinify" type="button" aria-pressed="false" title="Remove all whitespace">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>
-          <span>Minify</span>
-        </button>
-      </div>
-      <button id="btnValidate" type="button" title="Check the input and report any error">
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="m8.5 12.5 2.5 2.5 4.5-5"/></svg>
-        <span>Validate</span>
-      </button>
-    </div>
-
-    <span class="divider" aria-hidden="true"></span>
-
-    <div class="group group-options">
-      <label class="field" for="indent">
-        <span class="field-label">Indent</span>
-        <span class="select-wrap">
-          <select id="indent">
-            <option value="2" selected>2 spaces</option>
-            <option value="4">4 spaces</option>
-            <option value="tab">Tab</option>
-          </select>
-          <svg class="icon chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg>
-        </span>
-      </label>
-      <label class="check" for="sortKeys"><input type="checkbox" id="sortKeys"> Sort keys</label>
-    </div>
-
-    <span class="spacer" aria-hidden="true"></span>
-
-    <div class="group group-files">
-      <button id="btnSample" type="button">
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg>
-        <span>Load sample</span>
-      </button>
-      <label class="btn file-btn" for="fileIn">
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
-        <span>Open file</span>
-        <input type="file" id="fileIn" accept=".json,application/json,text/plain">
-      </label>
-      <button id="btnClear" type="button">
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>
-        <span>Clear</span>
-      </button>
-    </div>
-  </div>
-
-  <div id="status" class="status" role="status" aria-live="polite" data-state="empty">
-    <span class="pill">Ready</span><span class="msg">Paste or type JSON to begin.</span>
-  </div>
-
-  <div class="panes">
-    <section class="pane" aria-label="Input">
-      <div class="pane-head">
-        <label class="title" for="input">Input</label>
-        <span id="inMeta" class="badges"></span>
-      </div>
-      <div class="pane-body">
-        <textarea id="input" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" placeholder="Paste or type JSON here"></textarea>
-      </div>
-    </section>
-    <section class="pane" aria-label="Result">
-      <div class="pane-head">
-        <span class="title" id="outTitle">Formatted</span>
-        <span id="outMeta" class="badges"></span>
-        <div class="actions">
-          <button id="btnCopy" class="btn-sm" type="button">
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
-            <span class="label">Copy</span>
+  <section class="card" aria-label="Workspace">
+    <div class="toolbar" role="group" aria-label="JSON actions">
+      <div class="group group-actions">
+        <div class="segmented" role="group" aria-label="Output mode">
+          <button id="btnFormat" class="active" type="button" aria-pressed="true" title="Beautify with indentation (Ctrl/Cmd + Enter)">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h16M8 12h12M8 18h12M4 12h.01M4 18h.01"/></svg>
+            <span>Format</span>
           </button>
-          <button id="btnUse" class="btn-sm" type="button" title="Replace the input with this result">
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
-            <span>Use as input</span>
+          <button id="btnMinify" type="button" aria-pressed="false" title="Remove all whitespace">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>
+            <span>Minify</span>
           </button>
         </div>
+        <button id="btnValidate" type="button" title="Check the input and report any error">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="m8.5 12.5 2.5 2.5 4.5-5"/></svg>
+          <span>Validate</span>
+        </button>
       </div>
-      <div class="pane-body">
-        <pre id="output" tabindex="0" aria-labelledby="outTitle"><code id="outCode"></code></pre>
-        <div id="outEmpty" class="empty" data-kind="empty" hidden>
-          <span class="empty-icon" aria-hidden="true">
-            <svg class="icon icon-empty" viewBox="0 0 24 24" focusable="false"><path d="M8 4H7a2 2 0 0 0-2 2v4a2 2 0 0 1-2 2 2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h1M16 4h1a2 2 0 0 1 2 2v4a2 2 0 0 0 2 2 2 2 0 0 0-2 2v4a2 2 0 0 1-2 2h-1"/></svg>
-            <svg class="icon icon-error" viewBox="0 0 24 24" focusable="false"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01"/></svg>
+
+      <span class="divider" aria-hidden="true"></span>
+
+      <div class="group group-options">
+        <label class="field" for="indent">
+          <span class="field-label">Indent</span>
+          <span class="select-wrap">
+            <select id="indent">
+              <option value="2" selected>2 spaces</option>
+              <option value="4">4 spaces</option>
+              <option value="tab">Tab</option>
+            </select>
+            <svg class="icon chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg>
           </span>
-          <p class="empty-title" id="outEmptyTitle"></p>
-          <p class="empty-text" id="outEmptyText"></p>
-        </div>
+        </label>
+        <label class="check" for="sortKeys"><input type="checkbox" id="sortKeys"> Sort keys</label>
       </div>
-    </section>
-  </div>
+
+      <span class="spacer" aria-hidden="true"></span>
+
+      <div class="group group-files">
+        <button id="btnSample" type="button">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg>
+          <span>Load sample</span>
+        </button>
+        <label class="btn file-btn" for="fileIn">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+          <span>Open file</span>
+          <input type="file" id="fileIn" accept=".json,application/json,text/plain">
+        </label>
+        <button id="btnClear" type="button">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>
+          <span>Clear</span>
+        </button>
+      </div>
+    </div>
+
+    <div id="status" class="status" role="status" aria-live="polite" data-state="empty">
+      <span class="pill">Ready</span><span class="msg">Paste or type JSON to begin.</span>
+    </div>
+
+    <div class="panes">
+      <section class="pane" aria-label="Input">
+        <div class="pane-head">
+          <label class="title" for="input">Input</label>
+          <span id="inMeta" class="badges"></span>
+        </div>
+        <div class="pane-body">
+          <textarea id="input" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" placeholder="Paste or type JSON here"></textarea>
+        </div>
+      </section>
+      <section class="pane" aria-label="Result">
+        <div class="pane-head">
+          <span class="title" id="outTitle">Formatted</span>
+          <span id="outMeta" class="badges"></span>
+          <div class="actions">
+            <button id="btnCopy" class="btn-sm" type="button">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
+              <span class="label">Copy</span>
+            </button>
+            <button id="btnUse" class="btn-sm" type="button" title="Replace the input with this result">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+              <span>Use as input</span>
+            </button>
+          </div>
+        </div>
+        <div class="pane-body">
+          <pre id="output" tabindex="0" aria-labelledby="outTitle"><code id="outCode"></code></pre>
+          <div id="outEmpty" class="empty" data-kind="empty" hidden>
+            <span class="empty-icon" aria-hidden="true">
+              <svg class="icon icon-empty" viewBox="0 0 24 24" focusable="false"><path d="M8 4H7a2 2 0 0 0-2 2v4a2 2 0 0 1-2 2 2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h1M16 4h1a2 2 0 0 1 2 2v4a2 2 0 0 0 2 2 2 2 0 0 0-2 2v4a2 2 0 0 1-2 2h-1"/></svg>
+              <svg class="icon icon-error" viewBox="0 0 24 24" focusable="false"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01"/></svg>
+            </span>
+            <p class="empty-title" id="outEmptyTitle"></p>
+            <p class="empty-text" id="outEmptyText"></p>
+          </div>
+        </div>
+      </section>
+    </div>
+  </section>
 
   <footer class="foot">
     <span class="combo"><kbd>Ctrl</kbd> + <kbd>Enter</kbd></span> or <span class="combo"><kbd>&#x2318;</kbd> + <kbd>Enter</kbd></span> formats the input.
