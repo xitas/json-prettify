@@ -20,9 +20,13 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 
 ```
 .
-├── index.html   # Page markup
-├── style.css    # Styles
-├── script.js    # Formatting, validation and UI logic
+├── index.html              # Page markup
+├── assets/
+│   ├── css/
+│   │   └── style.css       # Styles and light/dark theme tokens
+│   └── js/
+│       ├── json-tools.js   # Pure helpers: error parsing, sorting, stats, highlighting
+│       └── app.js          # UI wiring: toolbar, input/output panes, status line
 └── README.md
 ```
 
