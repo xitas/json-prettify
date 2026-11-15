@@ -156,6 +156,56 @@
     e.target.value = '';
   });
 
+  // Theme toggle. The inline script in index.html sets data-theme before first paint;
+  // this keeps the button, color-scheme meta and saved choice in sync.
+  var THEME_KEY = 'json-formatter-theme';
+  var root = document.documentElement;
+  var themeBtn = $('themeToggle');
+  var themeIcon = themeBtn.querySelector('.icon');
+  var colorMeta = document.querySelector('meta[name="color-scheme"]');
+  var mq = function (q) { return window.matchMedia ? window.matchMedia(q) : null; };
+  var reduceMotion = mq('(prefers-reduced-motion: reduce)');
+  var systemDark = mq('(prefers-color-scheme: dark)');
+  var fadeTimer = null;
+
+  function savedTheme() {
+    try {
+      var t = localStorage.getItem(THEME_KEY);
+      return t === 'light' || t === 'dark' ? t : null;
+    } catch (e) { return null; }
+  }
+
+  function applyTheme(theme, animate) {
+    if (animate && !(reduceMotion && reduceMotion.matches)) {
+      root.classList.add('theme-switching');
+      clearTimeout(fadeTimer);
+      fadeTimer = setTimeout(function () { root.classList.remove('theme-switching'); }, 300);
+    }
+    root.setAttribute('data-theme', theme);
+    if (colorMeta) colorMeta.setAttribute('content', theme);
+    var label = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+    themeBtn.setAttribute('aria-label', label);
+    themeBtn.title = label;
+    themeIcon.textContent = theme === 'dark' ? '☀︎' : '☾︎';
+  }
+
+  themeBtn.addEventListener('click', function () {
+    var next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    applyTheme(next, true);
+    try { localStorage.setItem(THEME_KEY, next); } catch (e) {}
+  });
+
+  // Until the user picks a theme, keep following the system setting.
+  if (systemDark) {
+    var onSystemChange = function () {
+      if (!savedTheme()) applyTheme(systemDark.matches ? 'dark' : 'light', true);
+    };
+    if (systemDark.addEventListener) systemDark.addEventListener('change', onSystemChange);
+    else if (systemDark.addListener) systemDark.addListener(onSystemChange);
+  }
+
+  applyTheme(root.getAttribute('data-theme') === 'dark' ? 'dark' : 'light', false);
+
   input.value = SAMPLE;
   update();
 })();

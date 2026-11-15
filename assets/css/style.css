@@ -4,8 +4,9 @@
  * Layout: a toolbar over a status line, then two equal panes (input left, result right) that stack on phones.
  */
 
-/* Light mode */
-:root {
+/* Light mode (also the fallback before a theme is set) */
+:root,
+:root[data-theme="light"] {
   color-scheme: light;
   --bg: #ffffff;
   --surface: #ffffff;
@@ -26,35 +27,49 @@
   --syn-num: #595959;           /* mid-gray */
   --syn-bool: #595959;          /* mid-gray */
   --syn-null: #595959;          /* italic */
-  --font-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-code:
-    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
 /* Dark mode */
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --bg: #000000;
-    --surface: #0f0f0f;
-    --surface-2: #1c1c1c;
-    --surface-3: #2e2e2e;
-    --fg: #f2f2f2;
-    --muted: #a8a8a8;
-    --line: #333333;
-    --line-strong: #8c8c8c;
-    --focus: #ffffff;
-    --primary-bg: #f2f2f2;
-    --primary-fg: #000000;
-    --primary-hover: #c8c8c8;
-    --selection-bg: #f2f2f2;
-    --selection-fg: #000000;
-    --syn-key: #ffffff;
-    --syn-str: #e0e0e0;
-    --syn-num: #a8a8a8;
-    --syn-bool: #a8a8a8;
-    --syn-null: #a8a8a8;
-  }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --surface: #0f0f0f;
+  --surface-2: #1c1c1c;
+  --surface-3: #2e2e2e;
+  --fg: #f2f2f2;
+  --muted: #a8a8a8;
+  --line: #333333;
+  --line-strong: #8c8c8c;
+  --focus: #ffffff;
+  --primary-bg: #f2f2f2;
+  --primary-fg: #000000;
+  --primary-hover: #c8c8c8;
+  --selection-bg: #f2f2f2;
+  --selection-fg: #000000;
+  --syn-key: #ffffff;
+  --syn-str: #e0e0e0;
+  --syn-num: #a8a8a8;
+  --syn-bool: #a8a8a8;
+  --syn-null: #a8a8a8;
+}
+
+:root {
+  --font-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-code:
+    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --theme-fade: 0.25s ease;
+}
+
+/* Smooth color change while the theme toggle is switching (class set briefly by app.js) */
+.theme-switching,
+.theme-switching *,
+.theme-switching *::before {
+  transition:
+    background-color var(--theme-fade),
+    color var(--theme-fade),
+    border-color var(--theme-fade),
+    box-shadow var(--theme-fade),
+    outline-color var(--theme-fade) !important;
 }
 
 * {
@@ -89,8 +104,24 @@ body {
 
 .top {
   display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.top-text {
+  display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
+}
+button.theme-toggle {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
 }
 h1 {
   margin: 0;
@@ -257,8 +288,8 @@ pre:focus-visible {
   padding: 7px 11px;
 }
 .status[data-state="valid"] .pill::before {
-  content: "✓\00a0";
-  content: "✓\00a0" / "";
+  content: "\2713\00a0";
+  content: "\2713\00a0" / "";
 }
 .status[data-state="invalid"] .pill {
   background: var(--primary-bg);
@@ -266,8 +297,9 @@ pre:focus-visible {
   border-color: var(--primary-bg);
 }
 .status[data-state="invalid"] .pill::before {
-  content: "⚠\00a0";
-  content: "⚠\00a0" / "";
+  /* \FE0E asks for the plain-text glyph instead of a colored emoji */
+  content: "\26A0\FE0E\00a0";
+  content: "\26A0\FE0E\00a0" / "";
 }
 .status[data-state="invalid"] .msg {
   font-weight: 600;
@@ -391,7 +423,10 @@ pre .placeholder {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  * {
+  *,
+  .theme-switching,
+  .theme-switching *,
+  .theme-switching *::before {
     transition: none !important;
     animation: none !important;
   }
