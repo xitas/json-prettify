@@ -1,6 +1,6 @@
 /*
  * UI wiring for the JSON Formatter: reads the input, renders the result and
- * status line, and handles toolbar actions. Pure helpers live in json-tools.js.
+ * status bar, and handles toolbar actions. Pure helpers live in json-tools.js.
  */
 (function () {
   'use strict';
@@ -10,93 +10,140 @@
   var sortKeys = T.sortKeys, measure = T.measure, kindOf = T.kindOf, highlight = T.highlight;
 
   var $ = function (id) { return document.getElementById(id); };
-  var input = $('input'), outCode = $('outCode'), outTitle = $('outTitle'), outMeta = $('outMeta'), inMeta = $('inMeta');
+  var input = $('input'), output = $('output'), outCode = $('outCode'), outTitle = $('outTitle');
+  var outMeta = $('outMeta'), inMeta = $('inMeta');
+  var outEmpty = $('outEmpty'), outEmptyTitle = $('outEmptyTitle'), outEmptyText = $('outEmptyText');
   var statusEl = $('status'), indentSel = $('indent'), sortBox = $('sortKeys');
   var btnFormat = $('btnFormat'), btnMinify = $('btnMinify'), btnCopy = $('btnCopy'), btnUse = $('btnUse');
+  var copyLabel = btnCopy.querySelector('.label');
 
   var mode = 'format';
   var lastOutput = '';
+  var lastView = '';
   var HIGHLIGHT_LIMIT = 400000;
 
   var SAMPLE = '{"order":{"id":"ORD-20481","placedAt":"2026-11-04T09:42:17Z","status":"shipped","customer":{"name":"Amina Rauf","email":"amina@example.com","vip":true},"items":[{"sku":"KB-104","name":"Mechanical keyboard","qty":1,"price":89.5},{"sku":"MS-220","name":"Wireless mouse","qty":2,"price":24.99}],"shipping":{"method":"express","trackingNumber":null,"address":{"city":"Lahore","country":"PK","postalCode":"54000"}},"total":139.48,"notes":"Leave with reception \\"Block B\\""}}';
 
-  function setStatus(state, pill, html) {
-    statusEl.setAttribute('data-state', state);
-    statusEl.innerHTML = '<span class="pill">' + pill + '</span><span class="msg">' + html + '</span>';
+  function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+
+  // Builds badge markup from a list of plain-text labels (or {text, code} objects).
+  function badges(items) {
+    return items.map(function (it) {
+      var code = typeof it === 'object';
+      return '<span class="badge' + (code ? ' code' : '') + '">' + esc(code ? it.text : it) + '</span>';
+    }).join('');
   }
 
-  function setOutputPlaceholder(text) {
+  // Replays the fade-in on an element (skipped by CSS when reduced motion is on).
+  function reveal(el) {
+    el.classList.remove('reveal');
+    void el.offsetWidth;
+    el.classList.add('reveal');
+  }
+
+  function setStatus(state, pill, html, stats) {
+    statusEl.setAttribute('data-state', state);
+    statusEl.innerHTML = '<span class="pill">' + pill + '</span><span class="msg">' + html + '</span>' +
+      (stats && stats.length ? '<span class="badges">' + badges(stats) + '</span>' : '');
+  }
+
+  function showEmpty(kind, title, text) {
     lastOutput = '';
-    outCode.innerHTML = '<span class="placeholder">' + esc(text) + '</span>';
-    outMeta.textContent = '';
+    outCode.textContent = '';
+    output.hidden = true;
+    outEmpty.hidden = false;
+    outEmpty.setAttribute('data-kind', kind);
+    outEmptyTitle.textContent = title;
+    outEmptyText.textContent = text;
+    outMeta.innerHTML = '';
     btnCopy.disabled = true;
     btnUse.disabled = true;
   }
 
-  function update(opts) {
-    opts = opts || {};
+  function update() {
     var text = input.value;
     var bytes = byteLen(text);
-    inMeta.textContent = text.length ? fmtBytes(bytes) + ' · ' + (text.split('\n').length) + ' lines' : '';
+    inMeta.innerHTML = text.length ? badges([fmtBytes(bytes), plural(text.split('\n').length, 'line', 'lines')]) : '';
     outTitle.textContent = mode === 'minify' ? 'Minified' : 'Formatted';
+    var view;
 
     if (!text.trim()) {
-      setStatus('empty', 'Ready', 'Paste JSON on the left to begin.');
-      setOutputPlaceholder('The result appears here.');
-      return;
-    }
-
-    var value;
-    try {
-      value = JSON.parse(text);
-    } catch (e) {
-      var err = describeError(e, text);
-      var where = err.line ? ' <code>Line ' + err.line + ', column ' + err.col + '</code>' : '';
-      setStatus('invalid', 'Invalid', esc(err.message) + '.' + where);
-      if (err.pos !== null) {
-        var b = document.createElement('button');
-        b.type = 'button'; b.textContent = 'Go to error';
-        b.addEventListener('click', function () { jumpTo(err); });
-        statusEl.appendChild(b);
+      view = 'empty';
+      setStatus('empty', 'Ready', 'Paste or type JSON to begin.');
+      showEmpty('empty', 'Nothing to format yet', 'Paste JSON into the input, open a file, or load the sample.');
+    } else {
+      var value, err = null;
+      try {
+        value = JSON.parse(text);
+      } catch (e) {
+        err = describeError(e, text);
       }
-      setOutputPlaceholder('Fix the error in the input to see the result.');
-      return;
+
+      if (err) {
+        view = 'invalid';
+        setStatus('invalid', 'Invalid', esc(err.message) + '.',
+          err.line ? [{ text: 'Line ' + err.line + ', col ' + err.col, code: true }] : null);
+        if (err.pos !== null) {
+          var b = document.createElement('button');
+          b.type = 'button'; b.textContent = 'Go to error';
+          b.addEventListener('click', function () { jumpTo(err); });
+          statusEl.appendChild(b);
+        }
+        showEmpty('error', 'No result yet', 'Fix the error in the input and the result appears here.');
+      } else {
+        view = 'valid-' + mode;
+        if (sortBox.checked) value = sortKeys(value);
+        var indent = indentSel.value === 'tab' ? '\t' : +indentSel.value;
+        var result = mode === 'minify' ? JSON.stringify(value) : JSON.stringify(value, null, indent);
+        lastOutput = result;
+
+        outEmpty.hidden = true;
+        output.hidden = false;
+        if (result.length > HIGHLIGHT_LIMIT) outCode.textContent = result;
+        else outCode.innerHTML = highlight(result);
+
+        var stats = measure(value);
+        var outBytes = byteLen(result);
+        var meta = [fmtBytes(outBytes)];
+        if (mode === 'minify' && bytes > 0) {
+          var saved = Math.round((1 - outBytes / bytes) * 100);
+          meta = [fmtBytes(bytes) + ' → ' + fmtBytes(outBytes)];
+          if (saved > 0) meta.push('−' + saved + '%');
+        }
+        outMeta.innerHTML = badges(meta);
+        btnCopy.disabled = false;
+        btnUse.disabled = false;
+
+        setStatus('valid', 'Valid', 'Valid JSON', [
+          kindOf(value),
+          plural(stats.keys, 'key', 'keys') + ' in total',
+          'depth ' + stats.depth
+        ]);
+      }
     }
 
-    if (sortBox.checked) value = sortKeys(value);
-    var indent = indentSel.value === 'tab' ? '\t' : +indentSel.value;
-    var result = mode === 'minify' ? JSON.stringify(value) : JSON.stringify(value, null, indent);
-    lastOutput = result;
-
-    if (result.length > HIGHLIGHT_LIMIT) outCode.textContent = result;
-    else outCode.innerHTML = highlight(result);
-
-    var stats = measure(value);
-    var outBytes = byteLen(result);
-    var meta = fmtBytes(outBytes);
-    if (mode === 'minify' && bytes > 0) {
-      var saved = Math.round((1 - outBytes / bytes) * 100);
-      meta = fmtBytes(bytes) + ' → ' + fmtBytes(outBytes) + (saved > 0 ? ' (−' + saved + '%)' : '');
+    // Fade in only when what is shown changes, not on every keystroke.
+    if (view !== lastView) {
+      reveal(statusEl);
+      reveal(output.hidden ? outEmpty : output);
+      lastView = view;
     }
-    outMeta.textContent = meta;
-    btnCopy.disabled = false;
-    btnUse.disabled = false;
-
-    var detail = kindOf(value) + ' · ' + stats.keys + (stats.keys === 1 ? ' key' : ' keys') + ' in total · depth ' + stats.depth;
-    setStatus('valid', 'Valid', 'Valid JSON: ' + esc(detail) + '.');
   }
 
   function jumpTo(err) {
     input.focus();
     var end = Math.min(err.pos + 1, input.value.length);
     try { input.setSelectionRange(Math.min(err.pos, input.value.length), end); } catch (e) {}
-    input.scrollTop = Math.max(0, (err.line - 4) * 20);
+    var lineH = parseFloat(getComputedStyle(input).lineHeight) || 24;
+    input.scrollTop = Math.max(0, (err.line - 4) * lineH);
   }
 
   function setMode(m) {
     mode = m;
     btnFormat.classList.toggle('active', m === 'format');
     btnMinify.classList.toggle('active', m === 'minify');
+    btnFormat.setAttribute('aria-pressed', String(m === 'format'));
+    btnMinify.setAttribute('aria-pressed', String(m === 'minify'));
     update();
   }
 
@@ -128,22 +175,23 @@
     update();
   });
 
+  var copyTimer = null;
+  function flashCopy(text, ms) {
+    copyLabel.textContent = text;
+    clearTimeout(copyTimer);
+    copyTimer = setTimeout(function () { copyLabel.textContent = 'Copy'; }, ms);
+  }
   btnCopy.addEventListener('click', function () {
     if (!lastOutput) return;
-    var done = function () {
-      btnCopy.textContent = 'Copied';
-      setTimeout(function () { btnCopy.textContent = 'Copy'; }, 1500);
-    };
     var fallback = function () {
       var r = document.createRange();
       r.selectNodeContents(outCode);
       var sel = window.getSelection();
       sel.removeAllRanges(); sel.addRange(r);
-      btnCopy.textContent = 'Press Ctrl/Cmd + C';
-      setTimeout(function () { btnCopy.textContent = 'Copy'; }, 2500);
+      flashCopy('Press Ctrl/Cmd + C', 2500);
     };
     try {
-      navigator.clipboard.writeText(lastOutput).then(done, fallback);
+      navigator.clipboard.writeText(lastOutput).then(function () { flashCopy('Copied', 1500); }, fallback);
     } catch (e) { fallback(); }
   });
 
@@ -157,11 +205,11 @@
   });
 
   // Theme toggle. The inline script in index.html sets data-theme before first paint;
-  // this keeps the button, color-scheme meta and saved choice in sync.
+  // this keeps the button label, color-scheme meta and saved choice in sync.
+  // The sun/moon icons are swapped by CSS from data-theme.
   var THEME_KEY = 'json-formatter-theme';
   var root = document.documentElement;
   var themeBtn = $('themeToggle');
-  var themeIcon = themeBtn.querySelector('.icon');
   var colorMeta = document.querySelector('meta[name="color-scheme"]');
   var mq = function (q) { return window.matchMedia ? window.matchMedia(q) : null; };
   var reduceMotion = mq('(prefers-reduced-motion: reduce)');
@@ -186,7 +234,6 @@
     var label = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
     themeBtn.setAttribute('aria-label', label);
     themeBtn.title = label;
-    themeIcon.textContent = theme === 'dark' ? '☀︎' : '☾︎';
   }
 
   themeBtn.addEventListener('click', function () {
