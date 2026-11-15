@@ -1,70 +1,60 @@
-/* Layout: a toolbar over a status line, then two equal panes (input left, result right) that stack on phones. */
+/*
+ * Monochrome theme: black, white and grays only.
+ * Every color is defined here as a token; the rules below use only these variables.
+ * Layout: a toolbar over a status line, then two equal panes (input left, result right) that stack on phones.
+ */
+
+/* Light mode */
 :root {
-  --bg: #f2f5f4;
+  color-scheme: light;
+  --bg: #ffffff;
   --surface: #ffffff;
-  --surface-2: #eaf0ef;
-  --fg: #13201f;
-  --muted: #586967;
-  --line: #d3dcda;
-  --accent: #0b7a75;
-  --accent-fg: #ffffff;
-  --accent-soft: #d9efed;
-  --ok: #1b7f4b;
-  --ok-soft: #dcf2e5;
-  --err: #b3261e;
-  --err-soft: #fbe3e0;
-  --syn-key: #1d5fa8;
-  --syn-str: #0b7a75;
-  --syn-num: #a35200;
-  --syn-bool: #7a3bb0;
-  --syn-null: #7b8b89;
+  --surface-2: #f0f0f0;         /* pane headers, hovered buttons */
+  --surface-3: #e0e0e0;         /* pressed buttons */
+  --fg: #000000;                /* body text */
+  --muted: #595959;             /* secondary text */
+  --line: #d4d4d4;              /* decorative dividers */
+  --line-strong: #767676;       /* control and status borders */
+  --focus: #000000;             /* focus ring */
+  --primary-bg: #000000;
+  --primary-fg: #ffffff;
+  --primary-hover: #333333;
+  --selection-bg: #000000;
+  --selection-fg: #ffffff;
+  --syn-key: #000000;           /* bold */
+  --syn-str: #262626;           /* regular */
+  --syn-num: #595959;           /* mid-gray */
+  --syn-bool: #595959;          /* mid-gray */
+  --syn-null: #595959;          /* italic */
   --font-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-code:
     "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
+
+/* Dark mode */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0e1514;
-    --surface: #152020;
-    --surface-2: #1b2928;
-    --fg: #e2ecea;
-    --muted: #95a8a5;
-    --line: #2a3a38;
-    --accent: #3fc4bb;
-    --accent-fg: #04201e;
-    --accent-soft: #17322f;
-    --ok: #6fdca0;
-    --ok-soft: #163325;
-    --err: #ff9187;
-    --err-soft: #3a1c1a;
-    --syn-key: #7db4f0;
-    --syn-str: #4fd1c5;
-    --syn-num: #f0a35e;
-    --syn-bool: #c79bf2;
-    --syn-null: #8a9b98;
+  :root {
     color-scheme: dark;
+    --bg: #000000;
+    --surface: #0f0f0f;
+    --surface-2: #1c1c1c;
+    --surface-3: #2e2e2e;
+    --fg: #f2f2f2;
+    --muted: #a8a8a8;
+    --line: #333333;
+    --line-strong: #8c8c8c;
+    --focus: #ffffff;
+    --primary-bg: #f2f2f2;
+    --primary-fg: #000000;
+    --primary-hover: #c8c8c8;
+    --selection-bg: #f2f2f2;
+    --selection-fg: #000000;
+    --syn-key: #ffffff;
+    --syn-str: #e0e0e0;
+    --syn-num: #a8a8a8;
+    --syn-bool: #a8a8a8;
+    --syn-null: #a8a8a8;
   }
-}
-:root[data-theme="dark"] {
-  --bg: #0e1514;
-  --surface: #152020;
-  --surface-2: #1b2928;
-  --fg: #e2ecea;
-  --muted: #95a8a5;
-  --line: #2a3a38;
-  --accent: #3fc4bb;
-  --accent-fg: #04201e;
-  --accent-soft: #17322f;
-  --ok: #6fdca0;
-  --ok-soft: #163325;
-  --err: #ff9187;
-  --err-soft: #3a1c1a;
-  --syn-key: #7db4f0;
-  --syn-str: #4fd1c5;
-  --syn-num: #f0a35e;
-  --syn-bool: #c79bf2;
-  --syn-null: #8a9b98;
-  color-scheme: dark;
 }
 
 * {
@@ -72,6 +62,10 @@
 }
 [hidden] {
   display: none !important;
+}
+::selection {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
 }
 body {
   margin: 0;
@@ -141,7 +135,7 @@ select,
   padding: 0 12px;
   color: var(--fg);
   background: var(--surface);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   border-radius: 6px;
   cursor: pointer;
   display: inline-flex;
@@ -153,20 +147,30 @@ select:hover,
 .file-btn:hover {
   background: var(--surface-2);
 }
+button:active,
+.file-btn:active {
+  background: var(--surface-3);
+}
 button.primary {
-  background: var(--accent);
-  color: var(--accent-fg);
-  border-color: var(--accent);
+  background: var(--primary-bg);
+  color: var(--primary-fg);
+  border-color: var(--primary-bg);
 }
-button.primary:hover {
-  filter: brightness(1.08);
-  background: var(--accent);
+button.primary:hover,
+button.primary:active {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
 }
-button.active {
-  box-shadow: inset 0 -2px 0 var(--accent);
+/* Selected mode (Format / Minify) when it is not the primary button */
+button.active:not(.primary) {
+  box-shadow: inset 0 -3px 0 var(--fg);
 }
-button.primary.active {
-  box-shadow: none;
+button:disabled,
+button:disabled:hover {
+  background: var(--surface);
+  color: var(--muted);
+  border-color: var(--line);
+  cursor: not-allowed;
 }
 button:focus-visible,
 select:focus-visible,
@@ -174,8 +178,12 @@ textarea:focus-visible,
 pre:focus-visible,
 .file-btn:focus-within,
 .check input:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
+}
+textarea:focus-visible,
+pre:focus-visible {
+  outline-offset: -3px;
 }
 .file-btn input {
   position: absolute;
@@ -196,7 +204,7 @@ pre:focus-visible,
   cursor: pointer;
 }
 .check input {
-  accent-color: var(--accent);
+  accent-color: var(--fg);
   width: 15px;
   height: 15px;
   margin: 0;
@@ -230,8 +238,9 @@ pre:focus-visible,
   text-transform: uppercase;
   padding: 2px 8px;
   border-radius: 99px;
+  border: 1px solid var(--line-strong);
   background: var(--surface-2);
-  color: var(--muted);
+  color: var(--fg);
 }
 .status .msg {
   min-width: 0;
@@ -241,21 +250,27 @@ pre:focus-visible,
   font-family: var(--font-code);
   font-size: 12.5px;
 }
-.status[data-state="valid"] {
-  background: var(--ok-soft);
-  border-color: transparent;
-}
-.status[data-state="valid"] .pill {
-  background: var(--ok);
-  color: var(--surface);
-}
+/* State is shown with an icon, weight and border, never with color. */
+.status[data-state="valid"],
 .status[data-state="invalid"] {
-  background: var(--err-soft);
-  border-color: transparent;
+  border: 2px solid var(--line-strong);
+  padding: 7px 11px;
+}
+.status[data-state="valid"] .pill::before {
+  content: "✓\00a0";
+  content: "✓\00a0" / "";
 }
 .status[data-state="invalid"] .pill {
-  background: var(--err);
-  color: var(--surface);
+  background: var(--primary-bg);
+  color: var(--primary-fg);
+  border-color: var(--primary-bg);
+}
+.status[data-state="invalid"] .pill::before {
+  content: "⚠\00a0";
+  content: "⚠\00a0" / "";
+}
+.status[data-state="invalid"] .msg {
+  font-weight: 600;
 }
 .status button {
   height: 26px;
@@ -273,7 +288,7 @@ pre:focus-visible,
   display: flex;
   flex-direction: column;
   background: var(--surface);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   border-radius: 8px;
   overflow: hidden;
 }
@@ -323,6 +338,7 @@ pre {
   line-height: 20px;
   tab-size: 2;
   color: var(--fg);
+  caret-color: var(--fg);
   background: var(--surface);
   white-space: pre;
   overflow: auto;
@@ -330,6 +346,7 @@ pre {
 }
 textarea::placeholder {
   color: var(--muted);
+  opacity: 1;
 }
 pre code {
   font: inherit;
@@ -340,8 +357,11 @@ pre .placeholder {
   font-size: 13px;
   white-space: normal;
 }
+
+/* Syntax highlighting: shades of gray plus weight and style */
 .k {
   color: var(--syn-key);
+  font-weight: 700;
 }
 .s {
   color: var(--syn-str);
@@ -351,9 +371,11 @@ pre .placeholder {
 }
 .b {
   color: var(--syn-bool);
+  font-weight: 500;
 }
 .z {
   color: var(--syn-null);
+  font-style: italic;
 }
 
 @media (max-width: 860px) {
