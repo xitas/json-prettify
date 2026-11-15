@@ -8,6 +8,7 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 
 - **Format / beautify** JSON with 2-space, 4-space or tab indentation (your choice is remembered)
 - **Line numbers** beside the input and the output, with the line of a syntax error highlighted
+- **Fix JSON** repairs common almost-JSON mistakes when you ask it to: trailing and missing commas, single or curly quotes, unquoted keys, comments, Python/JavaScript values (`True`, `None`, `undefined`, `NaN`) and a stray byte order mark. Text inside strings is never changed, and `Ctrl/Cmd + Z` undoes the fix
 - **Minify** JSON and see how much size you saved
 - **Validate** as you type, with the error message and the exact line and column
 - **Go to error** button that jumps to the problem in the input
@@ -15,7 +16,7 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 - **Syntax highlighting** for keys, strings, numbers, booleans and null
 - **Copy** the result, or use it as the new input
 - **Open a file** from your device, or load a sample to try it out
-- Keyboard shortcut: `Ctrl/Cmd + Enter` to format
+- Keyboard shortcuts: `Ctrl/Cmd + Enter` to format, `Ctrl/Cmd + Shift + Enter` to fix broken JSON
 
 ## Project structure
 

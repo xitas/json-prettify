@@ -627,3 +627,319 @@ describe('findSyntaxError', () => {
     }
   });
 });
+
+// ---------- repairJson ----------
+
+// Characters built from code points so the source stays plain ASCII.
+const BOM = String.fromCharCode(0xfeff), NBSP = String.fromCharCode(0xa0), ZWSP = String.fromCharCode(0x200b);
+const LDQ = String.fromCharCode(0x201c), RDQ = String.fromCharCode(0x201d);
+const LSQ = String.fromCharCode(0x2018), RSQ = String.fromCharCode(0x2019);
+
+// Repairs, checks the result parses, and returns { value, text, types }.
+function repaired(input) {
+  const r = T.repairJson(input);
+  assert.equal(r.ok, true, `should repair ${JSON.stringify(input)}: ${r.error}`);
+  return { value: JSON.parse(r.text), text: r.text, types: r.changes.map(c => c.type), r };
+}
+
+describe('repairJson: each repair type', () => {
+  test('trailing commas in objects and arrays', () => {
+    const { value, types, text } = repaired('{"a": [1, 2,], "b": {"c": 3,},}');
+    assert.deepEqual(value, { a: [1, 2], b: { c: 3 } });
+    assert.deepEqual(types, ['trailing-comma', 'trailing-comma', 'trailing-comma']);
+    assert.equal(text, '{"a": [1, 2], "b": {"c": 3}}');
+  });
+
+  test('trailing comma followed by a newline and a comment', () => {
+    assert.deepEqual(repaired('[\n  1,\n  2, // last\n]').value, [1, 2]);
+  });
+
+  test('single-quoted strings and keys become double-quoted', () => {
+    const { value, types } = repaired("{'name': 'Widget', 'tags': ['a', 'b']}");
+    assert.deepEqual(value, { name: 'Widget', tags: ['a', 'b'] });
+    assert.ok(types.every(t => t === 'single-quote'));
+    assert.equal(types.length, 5); // name, Widget, tags, a, b
+  });
+
+  test('double quotes inside single-quoted strings are escaped', () => {
+    assert.deepEqual(repaired(`{'say': 'he said "hi"'}`).value, { say: 'he said "hi"' });
+  });
+
+  test("escaped \\' inside single-quoted strings becomes a plain apostrophe", () => {
+    assert.deepEqual(repaired("['it\\'s', 'a\\\\b', 'line\\nbreak']").value, ["it's", 'a\\b', 'line\nbreak']);
+  });
+
+  test("an apostrophe inside a single-quoted string is kept ('it's')", () => {
+    assert.deepEqual(repaired("{'text': 'it's here', 'n': 1}").value, { text: "it's here", n: 1 });
+  });
+
+  test('unquoted keys', () => {
+    const { value, types, text } = repaired('{name: "x", $id: 1, _private: true, 2: "two", camelCase9: null}');
+    assert.deepEqual(value, { name: 'x', $id: 1, _private: true, 2: 'two', camelCase9: null });
+    assert.equal(types.filter(t => t === 'unquoted-key').length, 5);
+    assert.equal(text, '{"name": "x", "$id": 1, "_private": true, "2": "two", "camelCase9": null}');
+  });
+
+  test('// line and /* block */ comments are removed', () => {
+    const input = '// header\n{\n  "a": 1, // trailing note\n  /* block\n     over lines */ "b": 2\n}';
+    const { value, types } = repaired(input);
+    assert.deepEqual(value, { a: 1, b: 2 });
+    assert.deepEqual(types, ['comment', 'comment', 'comment']);
+  });
+
+  test('removing comments leaves no blank lines or trailing spaces', () => {
+    const input = '// header\n{\n  // own line\n  "a": 1, // after a value\n  /* own line */\n  "b": [1, /* inline */ 2]\n}\n// footer';
+    assert.equal(repaired(input).text, '{\n  "a": 1,\n  "b": [1, 2]\n}\n');
+  });
+
+  test('a comment with Windows line endings is removed with its line', () => {
+    assert.equal(repaired('{\r\n  // note\r\n  "a": 1\r\n}').text, '{\r\n  "a": 1\r\n}');
+  });
+
+  test('curly double and single quotes used as string quotes', () => {
+    const input = `{${LDQ}title${RDQ}: ${LDQ}Hello${RDQ}, ${LSQ}note${RSQ}: ${LSQ}it${RSQ}s fine${RSQ}}`;
+    const { value, types } = repaired(input);
+    assert.deepEqual(value, { title: 'Hello', note: `it${RSQ}s fine` });
+    assert.deepEqual(types, ['smart-quote', 'smart-quote', 'smart-quote', 'smart-quote']);
+  });
+
+  test('curly quotes mixed with a straight closing quote', () => {
+    assert.deepEqual(repaired(`[${LDQ}mixed"]`).value, ['mixed']);
+  });
+
+  test('Python True/False/None become true/false/null', () => {
+    const { value, r } = repaired('{"a": True, "b": False, "c": None}');
+    assert.deepEqual(value, { a: true, b: false, c: null });
+    assert.deepEqual(r.changes.map(c => c.detail), ['True \u2192 true', 'False \u2192 false', 'None \u2192 null']);
+  });
+
+  test('JavaScript undefined, NaN, Infinity and -Infinity become null', () => {
+    assert.deepEqual(repaired('[undefined, NaN, Infinity, -Infinity, 1]').value, [null, null, null, null, 1]);
+  });
+
+  test('a byte order mark at the start is removed', () => {
+    const { value, text, types } = repaired(BOM + '{"a": 1}');
+    assert.deepEqual(value, { a: 1 });
+    assert.equal(text, '{"a": 1}');
+    assert.deepEqual(types, ['bom']);
+  });
+
+  test('stray non-JSON whitespace at the start (and elsewhere) is removed', () => {
+    const { value, text, types } = repaired(NBSP + ZWSP + '{"a":' + NBSP + '1}');
+    assert.deepEqual(value, { a: 1 });
+    assert.equal(text, '{"a": 1}');
+    assert.deepEqual(types, ['whitespace', 'whitespace', 'whitespace']);
+  });
+
+  test('missing commas between items on separate lines', () => {
+    const { value, text, types } = repaired('{\n  "a": 1\n  "b": [\n    1\n    2\n  ]\n  "c": {"d": 1}\n  "e": "x"\n}');
+    assert.deepEqual(value, { a: 1, b: [1, 2], c: { d: 1 }, e: 'x' });
+    assert.equal(types.filter(t => t === 'missing-comma').length, 4);
+    assert.equal(text, '{\n  "a": 1,\n  "b": [\n    1,\n    2\n  ],\n  "c": {"d": 1},\n  "e": "x"\n}');
+  });
+
+  test('missing comma before an unquoted key on the next line', () => {
+    assert.deepEqual(repaired('{\n  a: 1\n  b: 2\n}').value, { a: 1, b: 2 });
+  });
+});
+
+describe('repairJson: positions and summary', () => {
+  const MIXED = "{\n  // settings\n  name: 'Widget',\n  tags: ['a', 'b',],\n  active: True\n  price: 9.50,\n}";
+
+  test('reports the line and column of each change in the original text', () => {
+    const r = T.repairJson(MIXED);
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.changes.map(c => `${c.type}@${c.line}:${c.col}`), [
+      'comment@2:3', 'unquoted-key@3:3', 'single-quote@3:9', 'unquoted-key@4:3', 'single-quote@4:10', 'single-quote@4:15',
+      'trailing-comma@4:18', 'unquoted-key@5:3', 'value@5:11', 'missing-comma@5:15', 'unquoted-key@6:3', 'trailing-comma@6:14']);
+  });
+
+  test('mixed problems: value, summary and exact text', () => {
+    const r = T.repairJson(MIXED);
+    assert.deepEqual(JSON.parse(r.text), { name: 'Widget', tags: ['a', 'b'], active: true, price: 9.5 });
+    assert.ok(r.text.includes('"price": 9.50'), 'number written exactly as before');
+    assert.equal(r.summary, 'Fixed: 2 trailing commas, 1 missing comma added, 3 single-quoted strings, 4 unquoted keys, ' +
+      '1 Python/JavaScript value, 1 comment removed.');
+  });
+
+  test('mixed problems from a JavaScript object literal', () => {
+    const input = "/* config */ {debug: false, retries: 3, hosts: ['a.example', \"b.example\",], timeout: undefined,}";
+    assert.deepEqual(repaired(input).value, { debug: false, retries: 3, hosts: ['a.example', 'b.example'], timeout: null });
+  });
+
+  test('mixed problems from a Python dict', () => {
+    const input = "{'id': 7, 'ok': True, 'tags': ('x'), 'meta': None}".replace("('x')", "['x',]");
+    assert.deepEqual(repaired(input).value, { id: 7, ok: true, tags: ['x'], meta: null });
+  });
+
+  test('summarizeRepairs uses singular and plural labels in a fixed order', () => {
+    const ch = types => types.map(type => ({ type }));
+    assert.equal(T.summarizeRepairs(ch(['comment', 'trailing-comma', 'trailing-comma', 'trailing-comma', 'single-quote', 'single-quote'])),
+      'Fixed: 3 trailing commas, 2 single-quoted strings, 1 comment removed.');
+    assert.equal(T.summarizeRepairs(ch(['bom'])), 'Fixed: 1 byte order mark removed.');
+    assert.equal(T.summarizeRepairs([]), '');
+  });
+});
+
+describe('repairJson: string contents are never changed', () => {
+  const tricky = {
+    url: 'http://example.com/path?q=1#frag',
+    apostrophe: "it's",
+    slashes: 'a // not a comment',
+    block: 'a /* not */ a comment',
+    quotes: 'say "hi"',
+    backslash: 'C:\\temp\\',
+    curly: `${LDQ}quoted${RDQ} and ${LSQ}single${RSQ}`,
+    words: 'True None undefined NaN Infinity',
+    commas: 'a,} b,] c',
+    unicode: '\u00e9\u65e5\u672c ' + String.fromCodePoint(0x1f600),
+    bom: BOM + 'inside'
+  };
+
+  test('double-quoted strings pass through untouched while other parts are repaired', () => {
+    const input = JSON.stringify(tricky, null, 2).replace(/\n}$/, ',\n  // done\n}');
+    const { value, types } = repaired(input);
+    assert.deepEqual(value, tricky);
+    // The comment comes before the closing brace, so it is recorded before the comma is known to be trailing.
+    assert.deepEqual(types, ['comment', 'trailing-comma']);
+  });
+
+  test('the repaired text keeps every string exactly as written', () => {
+    const input = JSON.stringify(tricky).replace(/}$/, ',}');
+    const { text } = repaired(input);
+    for (const v of Object.values(tricky)) assert.ok(text.includes(JSON.stringify(v)), JSON.stringify(v));
+  });
+
+  test('keys that look like comments or words are kept', () => {
+    assert.deepEqual(repaired('{"//": 1, "/*x*/": 2, "None": 3,}').value, { '//': 1, '/*x*/': 2, None: 3 });
+  });
+
+  test('escaped quotes inside strings do not end the string', () => {
+    assert.deepEqual(repaired('{"a": "x\\"y, // z", }').value, { a: 'x"y, // z' });
+    assert.deepEqual(repaired("{'a': 'x\\'y, // z', }").value, { a: "x'y, // z" });
+  });
+});
+
+describe('repairJson: numbers, order and valid input', () => {
+  test('number precision and spelling are kept exactly', () => {
+    const { text } = repaired('{"big": 12345678901234567890123, "f": 1.10, "e": 1E+5, "neg": -0.000, "pi": 3.14159265358979323846,}');
+    assert.equal(text, '{"big": 12345678901234567890123, "f": 1.10, "e": 1E+5, "neg": -0.000, "pi": 3.14159265358979323846}');
+  });
+
+  test('key order is kept', () => {
+    assert.deepEqual(Object.keys(repaired("{z: 1, 'a': 2, m: 3,}").value), ['z', 'a', 'm']);
+  });
+
+  test('already-valid JSON comes back unchanged', () => {
+    for (const text of ['{}', '[]', '0', '"x"', ' [ 1 ,2 ] ', JSON.stringify(SAMPLE, null, 2), '{"a":"// not a comment, it\'s"}', '\n\t{"a": [1.10]}\n']) {
+      const r = T.repairJson(text);
+      assert.deepEqual({ ok: r.ok, changed: r.changed, text: r.text, changes: r.changes }, { ok: true, changed: false, text, changes: [] });
+    }
+  });
+});
+
+describe('repairJson: input that cannot be repaired', () => {
+  const CANNOT = [
+    ['missing comma on the same line (ambiguous)', '[1 2]'],
+    ['bare word value', '{"a": hello}'],
+    ['unterminated double-quoted string', '{"a": "unterminated'],
+    ['unterminated single-quoted string', "{'a': 'unterminated"],
+    ['unterminated block comment', '{"a": 1} /* open'],
+    ['unclosed object', '{a: 1'],
+    ['mismatched brackets', '[1}'],
+    ['two top-level values', '{"a": 1} {"b": 2}'],
+    ['double comma', '[1,,2]'],
+    ['leading plus sign', '[+1]'],
+    ['empty input', ''],
+  ];
+  for (const [name, input] of CANNOT) {
+    test(name, () => {
+      const r = T.repairJson(input);
+      assert.equal(r.ok, false);
+      assert.equal(r.text, input, 'input returned unchanged');
+      assert.equal(r.changed, false);
+      assert.deepEqual(r.changes, []);
+      assert.equal(typeof r.error, 'string');
+      assert.ok(r.error.length > 0);
+    });
+  }
+});
+
+describe('repairJson: fuzz', () => {
+  test('valid JSON broken in the supported ways repairs back to the same value', () => {
+    let seed = 2024;
+    const rand = n => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+    const chance = p => rand(1000) < p * 1000;
+    const pick = list => list[rand(list.length)];
+    const STRINGS = ['plain', "it's", 'say "hi"', 'http://x.com/a//b', 'a /* b */ c', 'back\\slash', 'tab\there', 'line\nbreak',
+      '\u00e9t\u00e9', 'emoji ' + String.fromCodePoint(0x1f600), 'True', 'null', '', ' spaced ', 'comma, colon: brace}'];
+    const KEYS = ['id', 'name', '$ref', '_x', 'camelCase', 'with space', 'dash-key', "o'k", 'n1'];
+
+    function makeValue(depth) {
+      const r = rand(depth > 3 ? 4 : 6);
+      if (r === 0) return pick(STRINGS);
+      if (r === 1) return pick([0, 1, -5, 3.25, 1e21, -0.5, 12345678]);
+      if (r === 2) return pick([true, false]);
+      if (r === 3) return null;
+      if (r === 4) return Array.from({ length: rand(4) }, () => makeValue(depth + 1));
+      const o = {};
+      for (let k = rand(4); k > 0; k--) o[pick(KEYS) + (k > 1 ? k : '')] = makeValue(depth + 1);
+      return o;
+    }
+
+    // JSON string body (without quotes) re-escaped for a single-quoted string.
+    function singleQuoted(s) {
+      const inner = JSON.stringify(s).slice(1, -1);
+      let out = '';
+      for (let i = 0; i < inner.length; i++) {
+        if (inner[i] === '\\') { const pair = inner.slice(i, i + 2); out += pair === '\\"' ? '"' : pair; i++; }
+        else out += inner[i] === "'" ? "\\'" : inner[i];
+      }
+      return "'" + out + "'";
+    }
+    function stringToken(s, isKey) {
+      if (isKey && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(s) && chance(0.3)) return s;          // unquoted key
+      const style = rand(4);
+      if (style === 1) return singleQuoted(s);
+      if (style === 2 && !/[\u2018\u2019\u201c\u201d]/.test(s)) return LDQ + JSON.stringify(s).slice(1, -1) + RDQ;
+      if (style === 3 && !/[\u2018\u2019\u201c\u201d]/.test(s)) return LSQ + JSON.stringify(s).slice(1, -1) + RSQ;
+      return JSON.stringify(s);
+    }
+    function brokenText(v, indent) {
+      const pad = '  '.repeat(indent + 1), end = '  '.repeat(indent);
+      if (v === null) return pick(['null', 'None', 'undefined', 'NaN', 'Infinity', '-Infinity']);
+      if (v === true) return pick(['true', 'True']);
+      if (v === false) return pick(['false', 'False']);
+      if (typeof v === 'number') return JSON.stringify(v);
+      if (typeof v === 'string') return stringToken(v, false);
+      const isArr = Array.isArray(v);
+      const items = isArr ? v.map(x => brokenText(x, indent + 1))
+        : Object.entries(v).map(([k, x]) => stringToken(k, true) + ': ' + brokenText(x, indent + 1));
+      if (!items.length) return isArr ? '[]' : '{}';
+      let body = '';
+      items.forEach((item, idx) => {
+        if (chance(0.15)) body += pad + '/* note */\n';
+        body += pad + item;
+        const last = idx === items.length - 1;
+        if (!last) body += chance(0.25) ? '' : ',';            // missing comma (always followed by a newline)
+        else if (chance(0.3)) body += ',';                      // trailing comma
+        if (chance(0.15)) body += ' // comment';
+        body += '\n';
+      });
+      return (isArr ? '[' : '{') + '\n' + body + end + (isArr ? ']' : '}');
+    }
+
+    let repairedCount = 0;
+    for (let round = 0; round < 1500; round++) {
+      const original = { root: makeValue(0), list: [makeValue(1), makeValue(1)] };
+      let text = brokenText(original, 0);
+      if (chance(0.1)) text = BOM + text;
+      if (chance(0.1)) text = NBSP + text;
+      const r = T.repairJson(text);
+      assert.equal(r.ok, true, `round ${round} should repair:\n${text}\n${r.error}`);
+      assert.deepEqual(JSON.parse(r.text), original, `round ${round}:\n${text}`);
+      if (r.changed) repairedCount++;
+    }
+    assert.ok(repairedCount > 1400, `most rounds needed repairs (${repairedCount})`);
+  });
+});

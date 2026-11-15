@@ -73,8 +73,8 @@
     var meta = [fmtBytes(outBytes)];
     if (mode === 'minify' && inBytes > 0) {
       var saved = Math.round((1 - outBytes / inBytes) * 100);
-      meta = [fmtBytes(inBytes) + ' → ' + fmtBytes(outBytes)];
-      if (saved > 0) meta.push('−' + saved + '%');
+      meta = [fmtBytes(inBytes) + ' \u2192 ' + fmtBytes(outBytes)];
+      if (saved > 0) meta.push('\u2212' + saved + '%');
     }
     return { value: value, result: result, html: html, meta: meta, stats: measure(value) };
   }
@@ -92,8 +92,8 @@
     setStatus('invalid', 'Error',
       deep ? 'This JSON is nested too deeply to format.' : 'Something went wrong while formatting this JSON.',
       depth !== null ? ['depth ' + depth.toLocaleString('en-US')] : null);
-    showEmpty('error', 'Can’t show a result', deep
-      ? 'The browser can’t format JSON nested this deeply. Try formatting a smaller part of it.'
+    showEmpty('error', 'Can\u2019t show a result', deep
+      ? 'The browser can\u2019t format JSON nested this deeply. Try formatting a smaller part of it.'
       : (e && e.message ? e.message : 'Unknown error') + '.');
   }
 
@@ -170,14 +170,14 @@
       } else if (err) {
         view = 'invalid';
         markErrorLine(err.line);
-        setStatus('invalid', 'Invalid', esc(err.message) + '.',
+        setStatus('invalid', 'Invalid', esc(err.message) + '.' +
+          (fixFailure ? ' <span class="fix-note">Couldn\u2019t fix this automatically: ' + esc(fixFailure) + '.</span>' : ''),
           err.line ? [{ text: 'Line ' + err.line + ', col ' + err.col, code: true }] : null);
-        if (err.pos !== null) {
-          var b = document.createElement('button');
-          b.type = 'button'; b.textContent = 'Go to error';
-          b.addEventListener('click', function () { jumpTo(err); });
-          statusEl.appendChild(b);
-        }
+        var actions = document.createElement('span');
+        actions.className = 'status-actions';
+        if (!fixFailure) actions.appendChild(statusButton('btnFix', 'Fix JSON', applyFix, true));
+        if (err.pos !== null) actions.appendChild(statusButton('btnGoError', 'Go to error', function () { jumpTo(err); }));
+        statusEl.appendChild(actions);
         showEmpty('error', 'No result yet', 'Fix the error in the input and the result appears here.');
       } else {
         view = 'valid-' + mode;
@@ -192,11 +192,17 @@
         btnCopy.disabled = false;
         btnUse.disabled = false;
 
-        setStatus('valid', 'Valid', 'Valid JSON', [
+        setStatus('valid', 'Valid', fixNotice ? esc(fixNotice) : 'Valid JSON', [
           kindOf(formatted.value),
           plural(formatted.stats.keys, 'key', 'keys') + ' in total',
           'depth ' + formatted.stats.depth
         ]);
+        if (fixNotice && fixUndo !== null) {
+          var undoWrap = document.createElement('span');
+          undoWrap.className = 'status-actions';
+          undoWrap.appendChild(statusButton('btnUndoFix', 'Undo fix', undoFix));
+          statusEl.appendChild(undoWrap);
+        }
       }
     }
 
@@ -206,6 +212,63 @@
       reveal(output.hidden ? outEmpty : output);
       lastView = view;
     }
+  }
+
+  function statusButton(id, label, onClick, primary) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.id = id;
+    b.textContent = label;
+    if (primary) b.className = 'primary';
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  // ---- Fix JSON ----
+  // The fix only ever runs when the user asks for it (button or shortcut).
+  var fixNotice = null;   // summary shown after a successful fix, until the next edit
+  var fixFailure = null;  // why the last fix attempt failed, until the next edit
+  var fixUndo = null;     // previous text, only when the browser's own undo could not be kept
+  var applyingFix = false;
+
+  function applyFix() {
+    var before = input.value;
+    var r = T.repairJson(before);
+    if (!r.ok || !r.changed) {
+      fixFailure = r.ok ? 'it is already valid' : r.error;
+      update();
+      var go = $('btnGoError');
+      if (go) go.focus();
+      return;
+    }
+    // Replace the text through the editing pipeline so Ctrl+Z / Cmd+Z can undo the fix.
+    applyingFix = true;
+    input.focus();
+    input.setSelectionRange(0, before.length);
+    var kept = false;
+    try { kept = document.execCommand('insertText', false, r.text); } catch (e) {}
+    if (!kept || input.value !== r.text) {
+      input.value = r.text;   // fallback: no browser undo, so offer an "Undo fix" button
+      fixUndo = before;
+    } else {
+      fixUndo = null;
+    }
+    applyingFix = false;
+    fixNotice = r.summary;
+    fixFailure = null;
+    clearTimeout(timer);
+    update();
+    input.setSelectionRange(0, 0);
+    input.scrollTop = 0;
+  }
+
+  function undoFix() {
+    if (fixUndo === null) return;
+    input.value = fixUndo;
+    fixUndo = null;
+    fixNotice = null;
+    update();
+    input.focus();
   }
 
   function jumpTo(err) {
@@ -229,7 +292,7 @@
   btnMinify.addEventListener('click', function () { setMode('minify'); });
   $('btnValidate').addEventListener('click', function () {
     update();
-    var b = statusEl.querySelector('button');
+    var b = $('btnGoError') || $('btnFix');
     if (b) b.focus();
   });
   // Indent choice is remembered like the theme (wrapped in try/catch for private modes).
@@ -247,12 +310,27 @@
   var timer = null;
   input.addEventListener('input', function () {
     refreshInputGutter(); // immediately, so numbers keep up with fast typing and pastes
+    if (!applyingFix) {
+      // Any edit (including Ctrl+Z undoing a fix) clears the fix summary and failure note.
+      fixNotice = null;
+      fixFailure = null;
+      fixUndo = null;
+    }
     clearTimeout(timer);
     timer = setTimeout(update, 160);
   });
   input.addEventListener('scroll', syncInputGutter, { passive: true });
   input.addEventListener('keydown', function (e) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); setMode('format'); }
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'Enter') { e.preventDefault(); setMode('format'); }
+  });
+  // Ctrl/Cmd + Shift + Enter: Fix JSON (only when the input is invalid).
+  document.addEventListener('keydown', function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Enter') {
+      e.preventDefault();
+      clearTimeout(timer);
+      update();
+      if (statusEl.getAttribute('data-state') === 'invalid' && $('btnFix')) applyFix();
+    }
   });
 
   $('btnSample').addEventListener('click', function () { input.value = SAMPLE; setMode('format'); });

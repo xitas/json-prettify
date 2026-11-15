@@ -511,12 +511,25 @@ kbd {
   content: "\26A0\FE0E\00a0";
   content: "\26A0\FE0E\00a0" / "";
 }
-.status .badges {
-  margin-right: auto;
-}
 .status button {
   height: var(--control-h-sm);
   padding: 0 var(--space-3);
+}
+.status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+.status button.primary {
+  background: var(--primary-bg);
+  color: var(--primary-fg);
+  border-color: var(--primary-bg);
+}
+.status button.primary:hover,
+.status button.primary:active {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
 }
 
 /* Small stat badges (sizes, counts, positions) */

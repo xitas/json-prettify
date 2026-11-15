@@ -156,6 +156,289 @@
     }
   }
 
+  /*
+   * Repairs common almost-JSON mistakes with a single character-by-character pass:
+   * comments, trailing commas, missing commas between items on separate lines,
+   * single or curly quotes, unquoted keys, Python/JavaScript values (True, None,
+   * undefined, NaN, Infinity), and a byte order mark or non-JSON whitespace.
+   *
+   * Text inside a double-quoted string is never changed, numbers are copied exactly as
+   * written, and key order is kept. Returns:
+   *   { ok, text, changed, changes: [{ type, line, col, detail }], summary, error }
+   * ok is true only when the result passes JSON.parse. When it is false, text is the
+   * original input, unchanged.
+   */
+  var NON_JSON_SPACE = /[\u00a0\u1680\u2000-\u200b\u2028\u2029\u202f\u205f\u3000]/;
+  var WORD_START = /[A-Za-z_$]/;
+  var WORD_CHAR = /[A-Za-z0-9_$]/;
+  var VALUE_WORDS = { 'true': 'true', 'false': 'false', 'null': 'null', 'True': 'true', 'False': 'false', 'None': 'null',
+    'undefined': 'null', 'NaN': 'null', 'Infinity': 'null', '-Infinity': 'null' };
+  var QUOTE_CLOSERS = { "'": "'", '\u2018': '\u2019\u2018', '\u2019': '\u2019\u2018', '\u201c': '\u201d\u201c"', '\u201d': '\u201d\u201c"' };
+
+  function repairJson(text) {
+    try {
+      JSON.parse(text);
+      return { ok: true, text: text, changed: false, changes: [], summary: '', error: null };
+    } catch (e) {}
+
+    var n = text.length, i = 0, out = [], changes = [];
+    var lineStarts = [0], k;
+    for (k = 0; k < n; k++) if (text.charCodeAt(k) === 10) lineStarts.push(k + 1);
+
+    function note(type, pos, detail) {
+      var lo = 0, hi = lineStarts.length - 1;
+      while (lo < hi) { var mid = (lo + hi + 1) >> 1; if (lineStarts[mid] <= pos) lo = mid; else hi = mid - 1; }
+      changes.push({ type: type, line: lo + 1, col: pos - lineStarts[lo] + 1, detail: detail || null });
+    }
+
+    var stack = [];            // open containers: '{' or '['
+    var expect = 'value';      // 'value' | 'key' | 'colon' | 'next' (comma or closer) | 'end'
+    var pendingComma = -1, pendingCommaPos = 0; // a comma that may turn out to be trailing
+    var lastValueEnd = -1, lastValueEndPos = 0; // where a missing comma would go
+    var newlineSince = false;  // a line break since the last value
+    var failure = null;
+
+    // Called when a key or value starts. Adds a missing comma when the previous item
+    // ended on an earlier line; returns the role of the new token.
+    function startItem() {
+      if (expect === 'next' && stack.length && newlineSince && lastValueEnd > 0) {
+        out[lastValueEnd - 1] += ',';
+        note('missing-comma', lastValueEndPos);
+        expect = stack[stack.length - 1] === '{' ? 'key' : 'value';
+      }
+      pendingComma = -1;
+      newlineSince = false;
+      return expect;
+    }
+    function endItem(role) {
+      if (role === 'key') { expect = 'colon'; return; }
+      lastValueEnd = out.length;
+      lastValueEndPos = i;
+      expect = stack.length ? 'next' : 'end';
+    }
+
+    // Removes spaces and tabs at the end of the output (whitespace only, never tokens).
+    // Returns true when that leaves the output at the start of a line.
+    function trimSpacesBefore() {
+      var last = out.length - 1;
+      while (last >= 0 && out[last] === '') last--;
+      if (last < 0) return true;
+      if (!/^[ \t\r\n]*$/.test(out[last])) return false;
+      out[last] = out[last].replace(/[ \t]+$/, '');
+      return out[last] === '' ? trimSpacesBefore() : /[\r\n]$/.test(out[last]);
+    }
+
+    // Reads a string opened by ' or a curly quote; returns the JSON string or null.
+    function readOddString(open) {
+      var closers = QUOTE_CLOSERS[open], strict = open === "'" || open === '\u2018' || open === '\u2019';
+      for (var pass = 0; pass < 2; pass++) {
+        var j = i + 1, content = '', firstClose = -1;
+        while (j < n) {
+          var ch = text.charAt(j);
+          if (ch === '\\') {
+            var nx = text.charAt(j + 1);
+            if (nx === "'" || nx === '\u2019' || nx === '\u2018') content += nx;  // \' is not valid JSON
+            else content += ch + nx;
+            j += 2;
+            continue;
+          }
+          if (closers.indexOf(ch) !== -1) {
+            if (firstClose === -1) firstClose = j;
+            // Single quotes can be apostrophes: only end where structure follows.
+            var after = j + 1;
+            while (after < n && (text.charAt(after) === ' ' || text.charAt(after) === '\t')) after++;
+            var na = text.charAt(after);
+            if (pass === 1 || !strict || after >= n || ',:}]\r\n/'.indexOf(na) !== -1) {
+              i = j + 1;
+              return '"' + content + '"';
+            }
+          }
+          if (ch === '\n' || ch === '\r') break;
+          content += ch === '"' ? '\\"' : ch;
+          j++;
+        }
+        if (firstClose === -1) return null;
+        // Second pass: no quote was followed by structure, so the first one ends it.
+        if (pass === 0) { var save = text.slice(i + 1, firstClose); if (save.indexOf('\n') !== -1) return null; }
+      }
+      return null;
+    }
+
+    while (i < n) {
+      var c = text.charAt(i), role, j;
+
+      if (c === '\ufeff') { note('bom', i); i++; continue; }
+      if (c === ' ' || c === '\t' || c === '\n' || c === '\r') {
+        j = i;
+        while (j < n && ' \t\n\r'.indexOf(text.charAt(j)) !== -1) j++;
+        if (text.slice(i, j).indexOf('\n') !== -1) newlineSince = true;
+        out.push(text.slice(i, j));
+        i = j;
+        continue;
+      }
+      if (NON_JSON_SPACE.test(c)) {
+        note('whitespace', i);
+        if (out.length) out.push(' ');
+        i++;
+        continue;
+      }
+      if (c === '/' && (text.charAt(i + 1) === '/' || text.charAt(i + 1) === '*')) {
+        if (text.charAt(i + 1) === '/') {
+          j = i + 2;
+          while (j < n && text.charAt(j) !== '\n' && text.charAt(j) !== '\r') j++;
+        } else {
+          j = text.indexOf('*/', i + 2);
+          if (j === -1) { failure = 'A /* comment is never closed'; break; }
+          if (text.slice(i, j).indexOf('\n') !== -1) newlineSince = true;
+          j += 2;
+        }
+        note('comment', i);
+        // Tidy up: drop the spaces before the comment, and when the comment had a line
+        // of its own, drop that line's line break too, so no blank line is left behind.
+        var ownLine = trimSpacesBefore();
+        i = j;
+        var eol = text.charAt(i) === '\r' && text.charAt(i + 1) === '\n' ? 2 : (text.charAt(i) === '\n' || text.charAt(i) === '\r' ? 1 : 0);
+        if (ownLine && (eol || i >= n)) { i += eol; newlineSince = true; }
+        continue;
+      }
+      if (c === '{' || c === '[') {
+        startItem();
+        out.push(c);
+        stack.push(c);
+        expect = c === '{' ? 'key' : 'value';
+        i++;
+        continue;
+      }
+      if (c === '}' || c === ']') {
+        if (pendingComma !== -1) {
+          out[pendingComma] = '';
+          note('trailing-comma', pendingCommaPos);
+          pendingComma = -1;
+        }
+        out.push(c);
+        if (stack.length && stack[stack.length - 1] === (c === '}' ? '{' : '[')) stack.pop();
+        i++;
+        newlineSince = false;
+        endItem('value');
+        continue;
+      }
+      if (c === ',') {
+        out.push(c);
+        if (expect === 'next') {
+          pendingComma = out.length - 1;
+          pendingCommaPos = i;
+          expect = stack[stack.length - 1] === '{' ? 'key' : 'value';
+        }
+        newlineSince = false;
+        i++;
+        continue;
+      }
+      if (c === ':') {
+        out.push(c);
+        if (expect === 'colon') expect = 'value';
+        newlineSince = false;
+        i++;
+        continue;
+      }
+      if (c === '"') {
+        role = startItem();
+        j = i + 1;
+        while (j < n && text.charAt(j) !== '"') j += text.charAt(j) === '\\' ? 2 : 1;
+        if (j >= n) { failure = 'A string is never closed'; break; }
+        out.push(text.slice(i, j + 1)); // copied exactly: string contents are never changed
+        i = j + 1;
+        endItem(role);
+        continue;
+      }
+      if (QUOTE_CLOSERS[c]) {
+        var start = i;
+        role = startItem();
+        var str = readOddString(c);
+        if (str === null) { failure = 'A quoted string is never closed'; break; }
+        note(c === "'" ? 'single-quote' : 'smart-quote', start);
+        out.push(str);
+        endItem(role);
+        continue;
+      }
+      if (c === '-' && text.substr(i + 1, 8) === 'Infinity') {
+        startItem();
+        note('value', i, '-Infinity \u2192 null');
+        out.push('null');
+        i += 9;
+        endItem('value');
+        continue;
+      }
+      if (c === '-' || c === '+' || c === '.' || (c >= '0' && c <= '9')) {
+        role = startItem();
+        j = i + 1;
+        while (j < n && /[0-9eE+\-.]/.test(text.charAt(j))) j++;
+        var num = text.slice(i, j);
+        if (role === 'key') { note('unquoted-key', i); out.push('"' + num + '"'); }
+        else out.push(num); // copied exactly as written
+        i = j;
+        endItem(role);
+        continue;
+      }
+      if (WORD_START.test(c) || (c > '\u007f' && !NON_JSON_SPACE.test(c))) {
+        role = startItem();
+        j = i + 1;
+        while (j < n && (WORD_CHAR.test(text.charAt(j)) || (text.charAt(j) > '\u007f' && !NON_JSON_SPACE.test(text.charAt(j)) && !QUOTE_CLOSERS[text.charAt(j)]))) j++;
+        var word = text.slice(i, j);
+        if (role === 'key') {
+          note('unquoted-key', i);
+          out.push('"' + word + '"');
+        } else if (VALUE_WORDS.hasOwnProperty(word)) {
+          if (VALUE_WORDS[word] !== word) note('value', i, word + ' \u2192 ' + VALUE_WORDS[word]);
+          out.push(VALUE_WORDS[word]);
+        } else {
+          out.push(word); // unknown bare word: left alone, so the result will not parse
+        }
+        i = j;
+        endItem(role);
+        continue;
+      }
+      out.push(c);
+      newlineSince = false;
+      i++;
+    }
+
+    var fail = function (reason) {
+      return { ok: false, text: text, changed: false, changes: [], summary: '', error: reason };
+    };
+    if (failure) return fail(failure);
+    var result = out.join('');
+    try {
+      JSON.parse(result);
+    } catch (e) {
+      var left = findSyntaxError(result);
+      return fail(left ? left.message : 'The JSON still is not valid after repairs');
+    }
+    return { ok: true, text: result, changed: true, changes: changes, summary: summarizeRepairs(changes), error: null };
+  }
+
+  var REPAIR_LABELS = [
+    ['trailing-comma', 'trailing comma', 'trailing commas'],
+    ['missing-comma', 'missing comma added', 'missing commas added'],
+    ['single-quote', 'single-quoted string', 'single-quoted strings'],
+    ['smart-quote', 'curly-quoted string', 'curly-quoted strings'],
+    ['unquoted-key', 'unquoted key', 'unquoted keys'],
+    ['value', 'Python/JavaScript value', 'Python/JavaScript values'],
+    ['comment', 'comment removed', 'comments removed'],
+    ['bom', 'byte order mark removed', 'byte order marks removed'],
+    ['whitespace', 'stray whitespace character', 'stray whitespace characters']
+  ];
+
+  // "Fixed: 3 trailing commas, 2 single-quoted strings, 1 comment removed."
+  function summarizeRepairs(changes) {
+    var counts = {}, parts = [];
+    for (var c = 0; c < changes.length; c++) counts[changes[c].type] = (counts[changes[c].type] || 0) + 1;
+    for (var l = 0; l < REPAIR_LABELS.length; l++) {
+      var count = counts[REPAIR_LABELS[l][0]];
+      if (count) parts.push(count + ' ' + (count === 1 ? REPAIR_LABELS[l][1] : REPAIR_LABELS[l][2]));
+    }
+    return parts.length ? 'Fixed: ' + parts.join(', ') + '.' : '';
+  }
+
   // Normalizes JSON.parse errors across browsers into { message, pos, line, col }.
   // When the browser gives no position (current Chrome/Edge, Safari), findSyntaxError
   // locates the error instead.
@@ -297,6 +580,8 @@
     esc: esc,
     describeError: describeError,
     findSyntaxError: findSyntaxError,
+    repairJson: repairJson,
+    summarizeRepairs: summarizeRepairs,
     sortKeys: sortKeys,
     measure: measure,
     kindOf: kindOf,
