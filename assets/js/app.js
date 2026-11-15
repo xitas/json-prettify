@@ -60,6 +60,41 @@
     btnUse.disabled = true;
   }
 
+  // Does all the formatting work before anything is drawn, so a failure (for example
+  // JSON.stringify running out of stack on very deep input) leaves nothing half-rendered.
+  function formatValue(value, inBytes) {
+    if (sortBox.checked) value = sortKeys(value);
+    var indent = indentSel.value === 'tab' ? '\t' : +indentSel.value;
+    var result = mode === 'minify' ? JSON.stringify(value) : JSON.stringify(value, null, indent);
+    var html = result.length <= HIGHLIGHT_LIMIT ? highlight(result) : null;
+    var outBytes = byteLen(result);
+    var meta = [fmtBytes(outBytes)];
+    if (mode === 'minify' && inBytes > 0) {
+      var saved = Math.round((1 - outBytes / inBytes) * 100);
+      meta = [fmtBytes(inBytes) + ' → ' + fmtBytes(outBytes)];
+      if (saved > 0) meta.push('−' + saved + '%');
+    }
+    return { value: value, result: result, html: html, meta: meta, stats: measure(value) };
+  }
+
+  function isTooDeep(e) {
+    return (e && e.name === 'RangeError') || /recursion|call stack|nest/i.test(String(e && e.message));
+  }
+
+  function showFailure(e, value) {
+    var deep = isTooDeep(e);
+    var depth = null;
+    if (value !== undefined) {
+      try { depth = measure(value).depth; } catch (e2) {}
+    }
+    setStatus('invalid', 'Error',
+      deep ? 'This JSON is nested too deeply to format.' : 'Something went wrong while formatting this JSON.',
+      depth !== null ? ['depth ' + depth.toLocaleString('en-US')] : null);
+    showEmpty('error', 'Can’t show a result', deep
+      ? 'The browser can’t format JSON nested this deeply. Try formatting a smaller part of it.'
+      : (e && e.message ? e.message : 'Unknown error') + '.');
+  }
+
   function update() {
     var text = input.value;
     var bytes = byteLen(text);
@@ -72,14 +107,29 @@
       setStatus('empty', 'Ready', 'Paste or type JSON to begin.');
       showEmpty('empty', 'Nothing to format yet', 'Paste JSON into the input, open a file, or load the sample.');
     } else {
-      var value, err = null;
+      var value, err = null, failure = null;
       try {
         value = JSON.parse(text);
       } catch (e) {
-        err = describeError(e, text);
+        // Syntax errors get a location; anything else (such as Firefox's "too much
+        // recursion" on very deep input) is a failure to process valid-looking JSON.
+        if (e instanceof SyntaxError) err = describeError(e, text);
+        else failure = e;
       }
 
-      if (err) {
+      var formatted = null;
+      if (!err && !failure) {
+        try {
+          formatted = formatValue(value, bytes);
+        } catch (e) {
+          failure = e;
+        }
+      }
+
+      if (failure) {
+        view = 'failed';
+        showFailure(failure, value);
+      } else if (err) {
         view = 'invalid';
         setStatus('invalid', 'Invalid', esc(err.message) + '.',
           err.line ? [{ text: 'Line ' + err.line + ', col ' + err.col, code: true }] : null);
@@ -92,34 +142,20 @@
         showEmpty('error', 'No result yet', 'Fix the error in the input and the result appears here.');
       } else {
         view = 'valid-' + mode;
-        if (sortBox.checked) value = sortKeys(value);
-        var indent = indentSel.value === 'tab' ? '\t' : +indentSel.value;
-        var result = mode === 'minify' ? JSON.stringify(value) : JSON.stringify(value, null, indent);
-        lastOutput = result;
-
+        lastOutput = formatted.result;
         outEmpty.hidden = true;
         output.hidden = false;
-        var highlighted = result.length <= HIGHLIGHT_LIMIT;
-        if (highlighted) outCode.innerHTML = highlight(result);
-        else outCode.textContent = result;
-        outCode.classList.toggle('hl', highlighted);
-
-        var stats = measure(value);
-        var outBytes = byteLen(result);
-        var meta = [fmtBytes(outBytes)];
-        if (mode === 'minify' && bytes > 0) {
-          var saved = Math.round((1 - outBytes / bytes) * 100);
-          meta = [fmtBytes(bytes) + ' → ' + fmtBytes(outBytes)];
-          if (saved > 0) meta.push('−' + saved + '%');
-        }
-        outMeta.innerHTML = badges(meta);
+        if (formatted.html !== null) outCode.innerHTML = formatted.html;
+        else outCode.textContent = formatted.result;
+        outCode.classList.toggle('hl', formatted.html !== null);
+        outMeta.innerHTML = badges(formatted.meta);
         btnCopy.disabled = false;
         btnUse.disabled = false;
 
         setStatus('valid', 'Valid', 'Valid JSON', [
-          kindOf(value),
-          plural(stats.keys, 'key', 'keys') + ' in total',
-          'depth ' + stats.depth
+          kindOf(formatted.value),
+          plural(formatted.stats.keys, 'key', 'keys') + ' in total',
+          'depth ' + formatted.stats.depth
         ]);
       }
     }

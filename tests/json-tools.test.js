@@ -1,7 +1,4 @@
 // Unit tests for assets/js/json-tools.js. Run with: node --test
-//
-// Tests marked { todo } describe the correct behavior for a known bug. They run and are
-// reported as TODO, but do not fail the suite until the bug is fixed.
 
 'use strict';
 
@@ -30,7 +27,7 @@ const SAMPLE = {
 // ---------- exports ----------
 
 test('exports every helper', () => {
-  for (const name of ['fmtBytes', 'byteLen', 'esc', 'describeError', 'sortKeys', 'measure', 'kindOf', 'highlight']) {
+  for (const name of ['fmtBytes', 'byteLen', 'esc', 'describeError', 'findSyntaxError', 'sortKeys', 'measure', 'kindOf', 'highlight']) {
     assert.equal(typeof T[name], 'function', name);
   }
 });
@@ -109,17 +106,41 @@ describe('sortKeys', () => {
     assert.equal(JSON.stringify(input), before);
   });
 
-  test('keeps a "__proto__" key from the JSON data', { todo: 'BUG: sortKeys drops a "__proto__" key (it sets the prototype instead)' }, () => {
+  test('keeps a "__proto__" key from the JSON data as a normal key', () => {
     const out = T.sortKeys(JSON.parse('{"b":1,"__proto__":{"x":1}}'));
     assert.equal(JSON.stringify(out), '{"__proto__":{"x":1},"b":1}');
+    assert.equal(Object.getPrototypeOf(out), Object.prototype, 'output is still a plain object');
+    assert.ok(Object.prototype.hasOwnProperty.call(out, '__proto__'));
   });
 
-  test('handles 1,000 levels of nesting', () => {
-    assert.ok(T.sortKeys(JSON.parse(deepArray(1000))));
+  test('never loses a key, including names that exist on Object.prototype', () => {
+    const special = ['__proto__', 'constructor', 'toString', 'valueOf', 'hasOwnProperty', '__defineGetter__', 'prototype', ''];
+    const text = '{' + special.map((k, i) => JSON.stringify(k) + ':{' + special.map((k2, j) => JSON.stringify(k2) + ':' + (i * 10 + j)).join(',') + '}').join(',') + '}';
+    const input = JSON.parse(text);
+    const out = T.sortKeys(input);
+    const sorted = [...special].sort();
+    assert.deepEqual(Object.keys(out), sorted);
+    for (const k of special) {
+      assert.deepEqual(Object.keys(out[k]), sorted, `nested keys under ${k}`);
+      for (const k2 of special) assert.equal(out[k][k2], input[k][k2]);
+    }
+    assert.equal(T.measure(out).keys, T.measure(input).keys);
+    assert.deepEqual(JSON.parse(JSON.stringify(out)), JSON.parse(text));
   });
 
-  test('handles very deep nesting (10,000 levels) without crashing', { todo: 'BUG: recursion overflows the stack at a few thousand levels' }, () => {
-    assert.doesNotThrow(() => T.sortKeys(JSON.parse(deepArray(10000))));
+  test('keeps the same keys and values as the input for the sample', () => {
+    assert.deepEqual(T.sortKeys(SAMPLE), SAMPLE);
+  });
+
+  test('handles 10,000 levels of nesting', () => {
+    const out = T.sortKeys(JSON.parse(deepArray(10000)));
+    assert.equal(T.measure(out).depth, 9999);
+  });
+
+  test('handles 100,000 levels of nesting, objects and arrays mixed', () => {
+    const text = '{"a":['.repeat(50000) + '1' + ']}'.repeat(50000);
+    const out = T.sortKeys(JSON.parse(text));
+    assert.equal(T.measure(out).depth, 100000);
   });
 });
 
@@ -146,8 +167,17 @@ describe('measure', () => {
     assert.deepEqual(T.measure(JSON.parse(deepArray(1000))), { keys: 0, depth: 999 });
   });
 
-  test('handles very deep nesting (10,000 levels) without crashing', { todo: 'BUG: recursion overflows the stack at a few thousand levels' }, () => {
+  test('handles 10,000 levels of nesting', () => {
     assert.deepEqual(T.measure(JSON.parse(deepArray(10000))), { keys: 0, depth: 9999 });
+  });
+
+  test('handles 100,000 levels of nesting', () => {
+    assert.deepEqual(T.measure(JSON.parse(deepArray(100000))), { keys: 0, depth: 99999 });
+    assert.deepEqual(T.measure(JSON.parse('{"k":'.repeat(100000) + '0' + '}'.repeat(100000))), { keys: 100000, depth: 100000 });
+  });
+
+  test('counts a "__proto__" key like any other key', () => {
+    assert.deepEqual(T.measure(JSON.parse('{"__proto__":{"x":1},"b":2}')), { keys: 3, depth: 2 });
   });
 });
 
@@ -199,8 +229,18 @@ describe('fmtBytes', () => {
     assert.equal(T.fmtBytes(5 * 1048576 + 1048576 / 4), '5.25 MB');
   });
 
-  test('just under 1 MB rounds up to 1.00 MB, not 1024.0 KB', { todo: 'BUG: 1048064–1048575 bytes show as "1024.0 KB"' }, () => {
+  test('switches to MB from 1023.95 KB up, so it never shows "1024.0 KB"', () => {
+    assert.equal(T.fmtBytes(1048524), '1023.9 KB'); // 1023.949 KB
+    assert.equal(T.fmtBytes(1048525), '1.00 MB');   // 1023.950 KB
     assert.equal(T.fmtBytes(1048575), '1.00 MB');
+    for (let n = 1024; n < 1048576 * 2; n += 997) assert.ok(!/^1024\.\d KB$/.test(T.fmtBytes(n)), `${n} -> ${T.fmtBytes(n)}`);
+  });
+
+  test('bytes to KB boundary: 1023 B, then 1.0 KB', () => {
+    assert.equal(T.fmtBytes(1023), '1023 B');
+    assert.equal(T.fmtBytes(1024), '1.0 KB');
+    assert.equal(T.fmtBytes(1075), '1.0 KB');
+    assert.equal(T.fmtBytes(1076), '1.1 KB');
   });
 });
 
@@ -309,21 +349,28 @@ describe('describeError: Chrome / Node (V8)', () => {
       { message: 'Unexpected non-whitespace character after JSON', pos: 4, line: 1, col: 5 });
   });
 
-  test('current format "Unexpected token \'}\', "…" is not valid JSON" gives a location',
-    { todo: 'BUG: current Chrome/Node messages have no position, so no line/column or "Go to error"' }, () => {
-      const text = '{"a":}';
-      const e = new SyntaxError('Unexpected token \'}\', "{"a":}" is not valid JSON');
-      assert.deepEqual(T.describeError(e, text), { message: "Unexpected token '}'", pos: 5, line: 1, col: 6 });
-    });
+  test('current format "Unexpected token \'}\', "…" is not valid JSON" gets a location from the scanner', () => {
+    const text = '{"a":}';
+    const e = new SyntaxError('Unexpected token \'}\', "{"a":}" is not valid JSON');
+    assert.deepEqual(T.describeError(e, text), { message: "Unexpected token '}'", pos: 5, line: 1, col: 6 });
+  });
 
-  test('real errors thrown by this Node version are described sensibly', () => {
-    for (const text of ['', ' ', '{', '{"a":}', '{"a":', '{a:1}', '[1] x', '{"a":1,}', '[1,,2]', '"\\x"', 'tru', '{"a":1\n"b":2}', '01']) {
+  test('the slice of input in the message is not repeated, even with quotes and ellipses', () => {
+    const text = '{\n  "name": "Widget",\n  "tags": ["a", "b",],\n  "price": 9.5\n}';
+    const e = new SyntaxError('Unexpected token \']\', ..."["a", "b",],\n  "pric"... is not valid JSON');
+    assert.deepEqual(T.describeError(e, text), { message: "Unexpected token ']'", pos: 42, line: 3, col: 21 });
+    assert.equal(text[42], ']');
+  });
+
+  test('real errors thrown by this Node version always get a location', () => {
+    for (const text of ['', ' ', '{', '{"a":}', '{"a":', '{a:1}', '[1] x', '{"a":1,}', '[1,,2]', '"\\x"', 'tru', '{"a":1\n"b":2}', '01', '[1,]', "{'a':1}"]) {
       const d = T.describeError(parseError(text), text);
       assert.ok(d.message && d.message.length > 0, `message for ${JSON.stringify(text)}`);
-      if (d.pos !== null) {
-        assert.ok(d.pos >= 0 && d.pos <= text.length, `pos in range for ${JSON.stringify(text)}`);
-        assert.ok(d.line >= 1 && d.col >= 1, `line/col for ${JSON.stringify(text)}`);
-      }
+      assert.ok(!/is not valid JSON/.test(d.message), `no repeated input for ${JSON.stringify(text)}: ${d.message}`);
+      assert.match(d.message, /^[A-Z]/, `capitalized: ${d.message}`);
+      assert.notEqual(d.pos, null, `position for ${JSON.stringify(text)}`);
+      assert.ok(d.pos >= 0 && d.pos <= text.length, `pos in range for ${JSON.stringify(text)}`);
+      assert.ok(d.line >= 1 && d.col >= 1, `line/col for ${JSON.stringify(text)}`);
     }
   });
 
@@ -333,42 +380,37 @@ describe('describeError: Chrome / Node (V8)', () => {
 });
 
 describe('describeError: Firefox (SpiderMonkey)', () => {
-  test('line/column message is converted to a position', () => {
+  test('line/column message is converted to a position, first letter capitalized', () => {
     assert.deepEqual(T.describeError(new SyntaxError("JSON.parse: expected property name or '}' at line 1 column 2 of the JSON data"), '{a:1}'),
-      { message: "expected property name or '}'", pos: 1, line: 1, col: 2 });
+      { message: "Expected property name or '}'", pos: 1, line: 1, col: 2 });
   });
 
   test('multi-line position', () => {
     const text = '{\n  "a": 1\n  "b": 2\n}';
     const d = T.describeError(new SyntaxError("JSON.parse: expected ',' or '}' after property value in object at line 3 column 3 of the JSON data"), text);
-    assert.deepEqual(d, { message: "expected ',' or '}' after property value in object", pos: 13, line: 3, col: 3 });
+    assert.deepEqual(d, { message: "Expected ',' or '}' after property value in object", pos: 13, line: 3, col: 3 });
     assert.equal(text[d.pos], '"');
   });
 
   test('unexpected end of data', () => {
     assert.deepEqual(T.describeError(new SyntaxError('JSON.parse: unexpected end of data at line 1 column 6 of the JSON data'), '{"a":'),
-      { message: 'unexpected end of data', pos: 5, line: 1, col: 6 });
-  });
-
-  test('message starts with a capital letter like other browsers', { todo: 'Minor: Firefox messages stay lowercase ("expected property name…")' }, () => {
-    const d = T.describeError(new SyntaxError("JSON.parse: expected property name or '}' at line 1 column 2 of the JSON data"), '{a:1}');
-    assert.equal(d.message, "Expected property name or '}'");
+      { message: 'Unexpected end of data', pos: 5, line: 1, col: 6 });
   });
 });
 
 describe('describeError: Safari (JavaScriptCore)', () => {
-  test('messages without a position do not crash and keep pos null', () => {
-    const d = T.describeError(new SyntaxError("JSON Parse error: Expected '}'"), '{"a":1');
-    assert.equal(d.pos, null);
-    assert.equal(d.line, null);
-    assert.ok(d.message.includes("Expected '}'"));
-  });
-
-  test('"JSON Parse error:" prefix is removed', { todo: 'BUG: Safari messages keep the "JSON Parse error: " prefix' }, () => {
+  test('"JSON Parse error:" prefix is removed', () => {
     assert.equal(T.describeError(new SyntaxError('JSON Parse error: Unexpected identifier "x"'), 'x').message, 'Unexpected identifier "x"');
   });
 
-  test('"Unexpected EOF" points to the end of the input', { todo: 'BUG: Safari "Unexpected EOF" is not recognized as end of input' }, () => {
+  test('messages without a position get a location from the scanner', () => {
+    assert.deepEqual(T.describeError(new SyntaxError('JSON Parse error: Unexpected identifier "x"'), '[1, x]'),
+      { message: 'Unexpected identifier "x"', pos: 4, line: 1, col: 5 });
+    assert.deepEqual(T.describeError(new SyntaxError("JSON Parse error: Expected '}'"), '{"a":1'),
+      { message: "Expected '}'", pos: 6, line: 1, col: 7 });
+  });
+
+  test('"Unexpected EOF" points to the end of the input', () => {
     assert.deepEqual(T.describeError(new SyntaxError('JSON Parse error: Unexpected EOF'), '{"a":'),
       { message: 'Unexpected EOF', pos: 5, line: 1, col: 6 });
   });
@@ -376,8 +418,8 @@ describe('describeError: Safari (JavaScriptCore)', () => {
 
 describe('describeError: other inputs', () => {
   test('non-Error values are turned into a message', () => {
-    assert.equal(T.describeError('boom', '{').message, 'boom');
-    assert.equal(T.describeError(null, '{').message, 'null');
+    assert.equal(T.describeError('boom', '{').message, 'Boom');
+    assert.equal(T.describeError(null, '{').message, 'Null');
   });
 
   test('an error with an empty message falls back to its name', () => {
@@ -393,5 +435,108 @@ describe('describeError: other inputs', () => {
     const d = T.describeError(new SyntaxError('Unexpected token } in JSON at position ' + text.indexOf('}')), text);
     assert.equal(d.line, 2);
     assert.equal(d.col, 7);
+  });
+});
+
+// ---------- findSyntaxError (scanner used when the browser gives no position) ----------
+
+describe('findSyntaxError', () => {
+  // [description, input, expected message, expected offset]; line/col are checked from the offset.
+  const CASES = [
+    // missing commas
+    ['missing comma between properties', '{"a":1 "b":2}', "Missing ',' or '}' after a property value", 7],
+    ['missing comma between array items', '[1 2]', "Missing ',' or ']' after an array item", 3],
+    ['missing comma on the next line', '{\n  "a": 1\n  "b": 2\n}', "Missing ',' or '}' after a property value", 13],
+    ['missing comma between objects', '[{"a":1}{"b":2}]', "Missing ',' or ']' after an array item", 8],
+    // trailing commas
+    ['trailing comma in array', '[1,2,]', "Trailing comma before ']'", 5],
+    ['trailing comma in object', '{"a":1,}', "Trailing comma before '}'", 7],
+    ['trailing comma before a newline', '{\n  "a": 1,\n}', "Trailing comma before '}'", 12],
+    ['double comma', '[1,,2]', "Unexpected ',' where a value was expected", 3],
+    // unclosed strings
+    ['unclosed string at end of input', '{"a": "abc', 'Unterminated string', 10],
+    ['line break inside a string', '{"a": "ab\ncd"}', 'Unterminated string (line break inside string)', 9],
+    ['unclosed key', '{"a', 'Unterminated string', 3],
+    ['raw tab inside a string', '["a\tb"]', 'Control character in string (use an escape such as \\t)', 3],
+    // unclosed braces and brackets
+    ['unclosed object', '{"a":1', "Unexpected end of input (missing '}')", 6],
+    ['unclosed array', '[[1,2]', "Unexpected end of input (missing ']')", 6],
+    ['unclosed nested object', '{"a":{"b":[1,2]}', "Unexpected end of input (missing '}')", 16],
+    ['wrong closing bracket', '[1}', "Missing ',' or ']' after an array item", 2],
+    ['extra closing brace', '{"a":1}}', "Unexpected '}' after the end of the JSON value", 7],
+    // bad escapes
+    ['unknown escape', '{"a": "\\x"}', "Bad escape '\\x' in string", 7],
+    ['short unicode escape', '["\\u12"]', 'Bad unicode escape (\\u needs 4 hex digits)', 2],
+    ['non-hex unicode escape', '{"a":"\\u12g4"}', 'Bad unicode escape (\\u needs 4 hex digits)', 6],
+    // single quotes
+    ['single-quoted key', "{'a':1}", 'Property names must use double quotes', 1],
+    ['single-quoted value', "{\"a\":'b'}", 'Strings must use double quotes', 5],
+    ['unquoted key', '{a:1}', 'Expected a property name in double quotes', 1],
+    // leading zeros and other number errors
+    ['leading zero', '[01]', 'Leading zeros are not allowed in numbers', 1],
+    ['negative leading zero', '{"n":-007}', 'Leading zeros are not allowed in numbers', 5],
+    ['lone minus', '[-]', "Expected a digit after '-'", 2],
+    ['decimal point without digits', '[1.]', 'Expected a digit after the decimal point', 3],
+    ['exponent without digits', '[1e+]', 'Expected a digit in the exponent', 4],
+    ['plus sign', '[+1]', "Unexpected '+' where a value was expected", 1],
+    // unexpected end of input
+    ['empty input', '', 'Unexpected end of input', 0],
+    ['only whitespace', ' \n ', 'Unexpected end of input', 3],
+    ['end after colon', '{"a":', "Unexpected end of input (missing '}')", 5],
+    ['end after comma', '[1,', "Unexpected end of input (missing ']')", 3],
+    ['cut-off literal', '{"a":tru', "Unexpected end of input (missing '}')", 8],
+    // other
+    ['missing colon', '{"a" 1}', "Expected ':' after the property name", 5],
+    ['misspelled literal', '[nul]', "Unexpected 'n' where a value was expected", 1],
+    ['text after the value', '[1] 2', "Unexpected '2' after the end of the JSON value", 4],
+    ['unicode before the error', '{"ключ": "😀",\n "k": }', "Unexpected '}' where a value was expected", 21],
+  ];
+
+  for (const [name, text, message, pos] of CASES) {
+    test(name, () => {
+      const before = text.slice(0, pos).split('\n');
+      const expected = { message, pos, line: before.length, col: before[before.length - 1].length + 1 };
+      assert.deepEqual(T.findSyntaxError(text), expected);
+      assert.throws(() => JSON.parse(text), SyntaxError, 'the input really is invalid');
+    });
+  }
+
+  test('returns null for valid JSON of every kind', () => {
+    const valid = ['0', '-0', '1e10', '-1.5E-7', '"text"', 'true', 'false', 'null', '[]', '{}', ' [ ] ',
+      '{"a":[1,{"b":null}],"c":-0.5e+3}', '"\\"\\\\\\/\\b\\f\\n\\r\\t\\u00e9"', '{"ключ":"😀👍🏽"}', '\r\n{\t"a" : 1 }\r\n',
+      JSON.stringify(SAMPLE), JSON.stringify(SAMPLE, null, '\t'), JSON.stringify({ s: 'x'.repeat(500_000) })];
+    for (const text of valid) {
+      assert.doesNotThrow(() => JSON.parse(text));
+      assert.equal(T.findSyntaxError(text), null, JSON.stringify(text).slice(0, 60));
+    }
+  });
+
+  test('handles 100,000 levels of nesting', () => {
+    assert.equal(T.findSyntaxError(deepArray(100000)), null);
+    const unclosed = deepArray(100000).slice(0, -1);
+    assert.deepEqual(T.findSyntaxError(unclosed), { message: "Unexpected end of input (missing ']')", pos: 199999, line: 1, col: 200000 });
+  });
+
+  test('agrees with JSON.parse on thousands of randomly broken inputs', () => {
+    // Small seeded random generator so failures are reproducible.
+    let seed = 12345;
+    const rand = n => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+    const base = JSON.stringify(SAMPLE, null, 2);
+    const pieces = ['{', '}', '[', ']', ',', ':', '"', "'", '\\', ' ', '\n', '0', '-', '.', 'e', 'x', 'n', 't'];
+    for (let round = 0; round < 3000; round++) {
+      let text = base;
+      for (let edits = 1 + rand(3); edits > 0; edits--) {
+        const at = rand(text.length + 1);
+        const kind = rand(3);
+        if (kind === 0) text = text.slice(0, at) + text.slice(at + 1);                       // delete a character
+        else if (kind === 1) text = text.slice(0, at) + pieces[rand(pieces.length)] + text.slice(at); // insert one
+        else text = text.slice(0, at) + pieces[rand(pieces.length)] + text.slice(at + 1);    // replace one
+      }
+      let valid = true;
+      try { JSON.parse(text); } catch { valid = false; }
+      const found = T.findSyntaxError(text);
+      assert.equal(found === null, valid, `round ${round}: ${JSON.stringify(text)}`);
+      if (found) assert.ok(found.pos >= 0 && found.pos <= text.length);
+    }
   });
 });
