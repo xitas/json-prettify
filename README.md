@@ -61,7 +61,7 @@ The helpers in `assets/js/json-tools.js` have unit tests that use Node's built-i
 node --test
 ```
 
-Tests marked `TODO` in the output describe known bugs. They run, but do not fail the suite until the bug is fixed. GitHub Actions runs the same command on every push and pull request.
+Known bugs are recorded as tests marked `todo`: they describe the correct behavior, run with the rest of the suite and show up as `TODO` in the output, but do not fail it until the bug is fixed. There are no known bugs at the moment. GitHub Actions runs the same command on every push and pull request.
 
 ## Usage
 
