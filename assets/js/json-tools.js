@@ -246,6 +246,33 @@
     return { keys: keys, depth: maxDepth };
   }
 
+  // Number of lines in a text, as a code view shows them: "" is 1 line, and a trailing
+  // newline starts a new (empty) line. Handles \n, \r\n and lone \r line endings.
+  function countLines(text) {
+    var count = 1, i = -1;
+    while ((i = text.indexOf('\n', i + 1)) !== -1) count++;
+    if (text.indexOf('\r') !== -1) {
+      // A lone \r (not followed by \n) also ends a line.
+      for (i = text.indexOf('\r'); i !== -1; i = text.indexOf('\r', i + 1)) {
+        if (text.charAt(i + 1) !== '\n') count++;
+      }
+    }
+    return count;
+  }
+
+  // Gutter text for line numbers 1..count, one per line ("1\n2\n3").
+  function lineNumbers(count) {
+    count = Math.max(1, Math.floor(count) || 1);
+    var parts = new Array(count);
+    for (var i = 0; i < count; i++) parts[i] = i + 1;
+    return parts.join('\n');
+  }
+
+  // Width of the gutter in digits: enough for the largest number, at least 2.
+  function gutterDigits(count) {
+    return Math.max(2, String(Math.max(1, Math.floor(count) || 1)).length);
+  }
+
   function kindOf(v) {
     if (Array.isArray(v)) return 'array of ' + v.length + (v.length === 1 ? ' item' : ' items');
     if (v === null) return 'null';
@@ -273,6 +300,9 @@
     sortKeys: sortKeys,
     measure: measure,
     kindOf: kindOf,
+    countLines: countLines,
+    lineNumbers: lineNumbers,
+    gutterDigits: gutterDigits,
     highlight: highlight
   };
 

@@ -71,7 +71,7 @@
         <label class="field" for="indent">
           <span class="field-label">Indent</span>
           <span class="select-wrap">
-            <select id="indent">
+            <select id="indent" title="Indentation used for formatted output">
               <option value="2" selected>2 spaces</option>
               <option value="4">4 spaces</option>
               <option value="tab">Tab</option>
@@ -112,6 +112,7 @@
           <span id="inMeta" class="badges"></span>
         </div>
         <div class="pane-body">
+          <div class="gutter" id="inGutter" aria-hidden="true"><div class="gutter-track" id="inGutterTrack" data-lines="1"><span class="gutter-mark" id="inGutterMark" hidden></span></div></div>
           <textarea id="input" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" placeholder="Paste or type JSON here"></textarea>
         </div>
       </section>
@@ -131,7 +132,12 @@
           </div>
         </div>
         <div class="pane-body">
-          <pre id="output" tabindex="0" aria-labelledby="outTitle"><code id="outCode"></code></pre>
+          <div id="output" class="code-scroll" tabindex="0" role="region" aria-labelledby="outTitle">
+            <div class="code-rows">
+              <div class="gutter" id="outGutter" aria-hidden="true"><div class="gutter-track" id="outGutterTrack" data-lines="1"></div></div>
+              <pre><code id="outCode"></code></pre>
+            </div>
+          </div>
           <div id="outEmpty" class="empty" data-kind="empty" hidden>
             <span class="empty-icon" aria-hidden="true">
               <svg class="icon icon-empty" viewBox="0 0 24 24" focusable="false"><path d="M8 4H7a2 2 0 0 0-2 2v4a2 2 0 0 1-2 2 2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h1M16 4h1a2 2 0 0 1 2 2v4a2 2 0 0 0 2 2 2 2 0 0 0-2 2v4a2 2 0 0 1-2 2h-1"/></svg>

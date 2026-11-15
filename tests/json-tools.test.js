@@ -27,7 +27,8 @@ const SAMPLE = {
 // ---------- exports ----------
 
 test('exports every helper', () => {
-  for (const name of ['fmtBytes', 'byteLen', 'esc', 'describeError', 'findSyntaxError', 'sortKeys', 'measure', 'kindOf', 'highlight']) {
+  for (const name of ['fmtBytes', 'byteLen', 'esc', 'describeError', 'findSyntaxError', 'sortKeys', 'measure', 'kindOf',
+    'countLines', 'lineNumbers', 'gutterDigits', 'highlight']) {
     assert.equal(typeof T[name], 'function', name);
   }
 });
@@ -241,6 +242,92 @@ describe('fmtBytes', () => {
     assert.equal(T.fmtBytes(1024), '1.0 KB');
     assert.equal(T.fmtBytes(1075), '1.0 KB');
     assert.equal(T.fmtBytes(1076), '1.1 KB');
+  });
+});
+
+// ---------- line numbers ----------
+
+describe('countLines', () => {
+  test('empty text is one line', () => {
+    assert.equal(T.countLines(''), 1);
+  });
+
+  test('counts newline-separated lines', () => {
+    assert.equal(T.countLines('a'), 1);
+    assert.equal(T.countLines('a\nb'), 2);
+    assert.equal(T.countLines('a\nb\nc'), 3);
+  });
+
+  test('a trailing newline starts a new empty line, like an editor', () => {
+    assert.equal(T.countLines('a\n'), 2);
+    assert.equal(T.countLines('\n'), 2);
+    assert.equal(T.countLines('\n\n\n'), 4);
+  });
+
+  test('handles \\r\\n and lone \\r line endings', () => {
+    assert.equal(T.countLines('a\r\nb\r\nc'), 3);
+    assert.equal(T.countLines('a\rb\rc'), 3);
+    assert.equal(T.countLines('a\r\nb\rc\nd'), 4);
+  });
+
+  test('matches the formatted output line by line', () => {
+    for (const indent of [2, 4, '\t']) {
+      const text = JSON.stringify(SAMPLE, null, indent);
+      assert.equal(T.countLines(text), text.split('\n').length);
+    }
+    assert.equal(T.countLines(JSON.stringify(SAMPLE)), 1, 'minified output is one line');
+  });
+
+  test('newlines escaped inside JSON strings do not count', () => {
+    assert.equal(T.countLines(JSON.stringify({ a: 'line1\nline2' }, null, 2)), 3);
+  });
+
+  test('counts 100,000 lines quickly', () => {
+    const text = 'x\n'.repeat(99_999) + 'x';
+    const t0 = performance.now();
+    assert.equal(T.countLines(text), 100_000);
+    assert.ok(performance.now() - t0 < 100);
+  });
+});
+
+describe('lineNumbers', () => {
+  test('builds the gutter text 1..n, one number per line', () => {
+    assert.equal(T.lineNumbers(1), '1');
+    assert.equal(T.lineNumbers(3), '1\n2\n3');
+    assert.equal(T.lineNumbers(12).split('\n').at(-1), '12');
+  });
+
+  test('always has as many lines as the text it numbers', () => {
+    for (const text of ['', 'a', 'a\n', '{\n  "a": 1\n}', JSON.stringify(SAMPLE, null, 2)]) {
+      assert.equal(T.countLines(T.lineNumbers(T.countLines(text))), T.countLines(text));
+    }
+  });
+
+  test('falls back to a single line for zero, negative or invalid counts', () => {
+    assert.equal(T.lineNumbers(0), '1');
+    assert.equal(T.lineNumbers(-5), '1');
+    assert.equal(T.lineNumbers(NaN), '1');
+    assert.equal(T.lineNumbers(2.7), '1\n2');
+  });
+
+  test('builds 5,000 and 100,000 lines quickly', () => {
+    const t0 = performance.now();
+    const big = T.lineNumbers(100_000);
+    assert.ok(performance.now() - t0 < 200);
+    assert.equal(T.countLines(big), 100_000);
+    assert.ok(big.endsWith('\n99999\n100000'));
+    assert.equal(T.lineNumbers(5000).split('\n')[4999], '5000');
+  });
+});
+
+describe('gutterDigits', () => {
+  test('is at least 2, then grows with the largest line number', () => {
+    assert.equal(T.gutterDigits(1), 2);
+    assert.equal(T.gutterDigits(99), 2);
+    assert.equal(T.gutterDigits(100), 3);
+    assert.equal(T.gutterDigits(9999), 4);
+    assert.equal(T.gutterDigits(10000), 5);
+    assert.equal(T.gutterDigits(0), 2);
   });
 });
 

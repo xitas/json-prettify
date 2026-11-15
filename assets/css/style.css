@@ -593,35 +593,70 @@ kbd {
   gap: var(--space-2);
   margin-left: auto;            /* stays right-aligned when it wraps on phones */
 }
+/*
+ * Code areas. Both panes are a line-number gutter beside the code, with no line
+ * wrapping, so each gutter number matches exactly one line. The gutter, textarea and
+ * <pre> share the same font, line height and top padding so the rows line up.
+ *   Input:  [gutter | textarea]; the textarea scrolls and app.js moves the gutter track.
+ *   Output: one scroll container holding [sticky gutter | pre], so both scroll together.
+ */
 .pane-body {
   position: relative;
+  display: flex;
   height: clamp(380px, 62vh, 680px);
+  background: var(--well);
+}
+
+textarea,
+pre,
+.gutter {
+  font-family: var(--font-code);
+  font-size: 15px;
+  line-height: 24px;
 }
 
 textarea,
 pre {
-  display: block;
   margin: 0;
-  width: 100%;
-  height: 100%;
   padding: var(--space-4);
   border: 0;
   border-radius: 0;
-  font-family: var(--font-code);
-  font-size: 15px;
-  line-height: 24px;
-  tab-size: 2;
+  tab-size: 4;                  /* a Tab indent shows as 4 columns, unlike the 2-space option */
   color: var(--fg);
-  caret-color: var(--fg);
   background: var(--well);
   white-space: pre;
+}
+textarea {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  caret-color: var(--fg);
   overflow: auto;
   resize: none;
-  scrollbar-width: thin;
-  scrollbar-color: var(--scroll-thumb) var(--scroll-track);
 }
+
+.code-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  overflow: auto;
+}
+.code-rows {
+  display: flex;
+  width: max-content;
+  min-width: 100%;
+  min-height: 100%;
+}
+pre {
+  flex: 1 0 auto;
+}
+pre code {
+  font: inherit;
+}
+
 textarea:focus-visible,
-pre:focus-visible {
+.code-scroll:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: -2px;
 }
@@ -629,35 +664,83 @@ textarea::placeholder {
   color: var(--muted);
   opacity: 1;
 }
-pre code {
-  font: inherit;
+
+/* Line-number gutter: numbers come from CSS generated content, so they can never be
+   selected or copied, and the whole gutter is hidden from screen readers. */
+.gutter {
+  --digits: 2;
+  position: relative;
+  flex: none;
+  width: calc(var(--digits) * 1ch + var(--space-3) + var(--space-2));
+  overflow: hidden;
+  color: var(--muted);
+  background: var(--surface-2);
+  border-right: 1px solid var(--line);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: none;
+}
+.gutter-track {
+  position: relative;
+  padding: var(--space-4) var(--space-2) var(--space-4) var(--space-3);
+  white-space: pre;             /* only here, so markup whitespace never adds rows */
+  will-change: transform;
+}
+.gutter-track::before {
+  content: attr(data-lines);
+}
+.code-rows .gutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+/* The line with a syntax error: its number is shown inverted on top of the gutter */
+.gutter-mark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(var(--space-4) + (var(--mark-line, 1) - 1) * 24px);
+  height: 24px;
+  padding-right: var(--space-2);
+  font-weight: 700;
+  color: var(--primary-fg);
+  background: var(--primary-bg);
 }
 
-/* Scrollbars for browsers without scrollbar-color (Safari) */
+/* Scrollbars */
+textarea,
+.code-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+}
+/* For browsers without scrollbar-color (Safari) */
 textarea::-webkit-scrollbar,
-pre::-webkit-scrollbar {
+.code-scroll::-webkit-scrollbar {
   width: 12px;
   height: 12px;
 }
 textarea::-webkit-scrollbar-track,
-pre::-webkit-scrollbar-track,
+.code-scroll::-webkit-scrollbar-track,
 textarea::-webkit-scrollbar-corner,
-pre::-webkit-scrollbar-corner {
+.code-scroll::-webkit-scrollbar-corner {
   background: var(--scroll-track);
 }
 textarea::-webkit-scrollbar-thumb,
-pre::-webkit-scrollbar-thumb {
+.code-scroll::-webkit-scrollbar-thumb {
   background: var(--scroll-thumb);
   border: 3px solid var(--scroll-track);
   border-radius: var(--radius-pill);
 }
 textarea::-webkit-scrollbar-thumb:hover,
-pre::-webkit-scrollbar-thumb:hover {
+.code-scroll::-webkit-scrollbar-thumb:hover {
   background: var(--scroll-thumb-hover);
 }
 
 /* Empty / error state for the result pane */
 .empty {
+  flex: 1 1 auto;
   height: 100%;
   display: flex;
   flex-direction: column;

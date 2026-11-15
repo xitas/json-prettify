@@ -16,6 +16,8 @@
   var statusEl = $('status'), indentSel = $('indent'), sortBox = $('sortKeys');
   var btnFormat = $('btnFormat'), btnMinify = $('btnMinify'), btnCopy = $('btnCopy'), btnUse = $('btnUse');
   var copyLabel = btnCopy.querySelector('.label');
+  var inGutter = $('inGutter'), inTrack = $('inGutterTrack'), inMark = $('inGutterMark');
+  var outGutter = $('outGutter'), outTrack = $('outGutterTrack');
 
   var mode = 'format';
   var lastOutput = '';
@@ -95,10 +97,46 @@
       : (e && e.message ? e.message : 'Unknown error') + '.');
   }
 
+  // ---- Line-number gutters ----
+  // The numbers are one string in a data attribute, shown with CSS generated content.
+  // It is rebuilt only when the line count changes, never on every keystroke.
+  var gutterCount = { input: 0, output: 0 };
+
+  function setGutterLines(which, gutter, track, count) {
+    if (gutterCount[which] === count) return;
+    gutterCount[which] = count;
+    track.setAttribute('data-lines', T.lineNumbers(count));
+    gutter.style.setProperty('--digits', T.gutterDigits(count));
+  }
+
+  // The textarea scrolls by itself (wheel, keys, touch, paste, caret moves); the gutter
+  // track follows its scrollTop.
+  function syncInputGutter() {
+    inTrack.style.transform = 'translateY(' + (-input.scrollTop) + 'px)';
+  }
+
+  function refreshInputGutter() {
+    setGutterLines('input', inGutter, inTrack, T.countLines(input.value));
+    syncInputGutter();
+  }
+
+  // Highlights the number of the line with a syntax error (null clears it).
+  function markErrorLine(line) {
+    if (line) {
+      inMark.textContent = line;
+      inMark.style.setProperty('--mark-line', line);
+      inMark.hidden = false;
+    } else {
+      inMark.hidden = true;
+    }
+  }
+
   function update() {
     var text = input.value;
     var bytes = byteLen(text);
-    inMeta.innerHTML = text.length ? badges([fmtBytes(bytes), plural(text.split('\n').length, 'line', 'lines')]) : '';
+    refreshInputGutter();
+    markErrorLine(null);
+    inMeta.innerHTML = text.length ? badges([fmtBytes(bytes), plural(T.countLines(text), 'line', 'lines')]) : '';
     outTitle.textContent = mode === 'minify' ? 'Minified' : 'Formatted';
     var view;
 
@@ -131,6 +169,7 @@
         showFailure(failure, value);
       } else if (err) {
         view = 'invalid';
+        markErrorLine(err.line);
         setStatus('invalid', 'Invalid', esc(err.message) + '.',
           err.line ? [{ text: 'Line ' + err.line + ', col ' + err.col, code: true }] : null);
         if (err.pos !== null) {
@@ -148,6 +187,7 @@
         if (formatted.html !== null) outCode.innerHTML = formatted.html;
         else outCode.textContent = formatted.result;
         outCode.classList.toggle('hl', formatted.html !== null);
+        setGutterLines('output', outGutter, outTrack, T.countLines(formatted.result));
         outMeta.innerHTML = badges(formatted.meta);
         btnCopy.disabled = false;
         btnUse.disabled = false;
@@ -192,14 +232,25 @@
     var b = statusEl.querySelector('button');
     if (b) b.focus();
   });
-  indentSel.addEventListener('change', function () { setMode('format'); });
+  // Indent choice is remembered like the theme (wrapped in try/catch for private modes).
+  var INDENT_KEY = 'json-formatter-indent';
+  try {
+    var savedIndent = localStorage.getItem(INDENT_KEY);
+    if (savedIndent === '2' || savedIndent === '4' || savedIndent === 'tab') indentSel.value = savedIndent;
+  } catch (e) {}
+  indentSel.addEventListener('change', function () {
+    try { localStorage.setItem(INDENT_KEY, indentSel.value); } catch (e) {}
+    setMode('format');
+  });
   sortBox.addEventListener('change', function () { update(); });
 
   var timer = null;
   input.addEventListener('input', function () {
+    refreshInputGutter(); // immediately, so numbers keep up with fast typing and pastes
     clearTimeout(timer);
     timer = setTimeout(update, 160);
   });
+  input.addEventListener('scroll', syncInputGutter, { passive: true });
   input.addEventListener('keydown', function (e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); setMode('format'); }
   });

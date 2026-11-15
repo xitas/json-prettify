@@ -6,7 +6,8 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 
 ## Features
 
-- **Format / beautify** JSON with 2-space, 4-space or tab indentation
+- **Format / beautify** JSON with 2-space, 4-space or tab indentation (your choice is remembered)
+- **Line numbers** beside the input and the output, with the line of a syntax error highlighted
 - **Minify** JSON and see how much size you saved
 - **Validate** as you type, with the error message and the exact line and column
 - **Go to error** button that jumps to the problem in the input
