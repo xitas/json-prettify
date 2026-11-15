@@ -208,6 +208,22 @@ h1 {
   letter-spacing: -0.02em;
   text-wrap: balance;
 }
+/* Heading with the logo mark; 1em keeps the mark the same size as the title (32px / 26px) */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.logo {
+  width: 1em;
+  height: 1em;
+  flex: none;
+  color: var(--fg);
+  transition: transform var(--dur) var(--ease);
+}
+.brand:hover .logo {
+  transform: rotate(-6deg);
+}
 .top p {
   color: var(--muted);
   max-width: 60ch;
@@ -777,5 +793,8 @@ pre::-webkit-scrollbar-thumb:hover {
   .theme-switching *::after {
     transition: none !important;
     animation: none !important;
+  }
+  .brand:hover .logo {
+    transform: none;
   }
 }
