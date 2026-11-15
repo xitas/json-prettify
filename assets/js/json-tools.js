@@ -102,4 +102,7 @@
     kindOf: kindOf,
     highlight: highlight
   };
-})(window);
+
+  // Also loadable from Node for the unit tests (no effect in the browser).
+  if (typeof module !== 'undefined' && module.exports) module.exports = global.JsonTools;
+})(typeof window !== 'undefined' ? window : globalThis);

@@ -1,0 +1,19 @@
+git add .gitignore
+git commit -m "Add .gitignore for local assistant instructions" -m "- Ignore CLAUDE.md so local project notes stay on this machine and
+  out of the repository"
+
+git add assets/js/json-tools.js tests/json-tools.test.js .github/workflows/test.yml README.md
+git commit -m "Add unit tests for json-tools with Node's test runner" -m "- Make json-tools.js loadable in Node via module.exports without
+  changing browser behavior
+- Add tests/json-tools.test.js covering formatting, minifying, key
+  sorting, stats, byte sizes, highlighting with HTML escaping, and
+  Chrome, Firefox and Safari error messages
+- Cover edge cases: empty input, deep nesting, unicode and emoji,
+  very long strings, 1e10, -0 and invalid JSON
+- Record known bugs as TODO tests so they stay visible without
+  failing the suite
+- Run node --test on every push and pull request with GitHub Actions
+- Document how to run the tests in the README"
+
+git log --oneline -5
+git show --stat HEAD

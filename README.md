@@ -27,6 +27,10 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 │   └── js/
 │       ├── json-tools.js   # Pure helpers: error parsing, sorting, stats, highlighting
 │       └── app.js          # UI wiring: toolbar, input/output panes, status line
+├── tests/
+│   └── json-tools.test.js  # Unit tests for json-tools.js
+├── .github/workflows/
+│   └── test.yml            # Runs the tests on every push and pull request
 └── README.md
 ```
 
@@ -48,6 +52,16 @@ python3 -m http.server 8000
 ```
 
 Then visit `http://localhost:8000`.
+
+## Running tests
+
+The helpers in `assets/js/json-tools.js` have unit tests that use Node's built-in test runner, so there is nothing to install. With Node.js 22 or newer:
+
+```bash
+node --test
+```
+
+Tests marked `TODO` in the output describe known bugs. They run, but do not fail the suite until the bug is fixed. GitHub Actions runs the same command on every push and pull request.
 
 ## Usage
 
