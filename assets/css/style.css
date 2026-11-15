@@ -1,7 +1,8 @@
 /*
- * JSON Formatter styles.
- * Monochrome theme: black, white and grays only. Every color is a token in the two
- * theme blocks below; the rest of the file refers only to variables.
+ * JSON Prettify styles.
+ * Monochrome theme: grays only, except the JSON syntax colors (--json-*) in the output.
+ * Every color is a token in the two theme blocks below; the rest of the file refers
+ * only to variables.
  * Layout: header, toolbar, status bar, then input and result panes
  * (side by side on wide screens, stacked on phones).
  */
@@ -31,11 +32,13 @@
   --scroll-thumb-hover: #808080;
   --scroll-track: #f8f8f8;
   --card-shadow: 0 1px 2px rgba(31, 31, 31, 0.04), 0 8px 24px rgba(31, 31, 31, 0.06);
-  --syn-key: #1f1f1f;           /* bold */
-  --syn-str: #333333;           /* regular */
-  --syn-num: #595959;           /* mid-gray */
-  --syn-bool: #595959;          /* mid-gray, medium weight */
-  --syn-null: #595959;          /* mid-gray, italic */
+  /* JSON syntax: the only colors in the interface (deeper tones for light mode) */
+  --json-key: #123c75;          /* blue, bold */
+  --json-string: #2e7d4f;       /* green */
+  --json-number: #a14f00;       /* amber */
+  --json-boolean: #9b47b5;      /* purple, medium weight */
+  --json-null: #5c5c5c;         /* gray, italic */
+  --json-punct: #6b6b6b;        /* braces, brackets, commas, colons */
 }
 
 /* Dark mode */
@@ -61,11 +64,13 @@
   --scroll-track: #222222;
   /* Dark mode relies on the lighter card and its border; the shadow is only a hint */
   --card-shadow: 0 1px 2px rgba(12, 12, 12, 0.25);
-  --syn-key: #f0f0f0;
-  --syn-str: #d6d6d6;
-  --syn-num: #b0b0b0;
-  --syn-bool: #b0b0b0;
-  --syn-null: #b0b0b0;
+  /* JSON syntax: lighter, softer tones for dark mode */
+  --json-key: #6aa3ea;
+  --json-string: #8cc79f;
+  --json-number: #e5a663;
+  --json-boolean: #e2b8f2;
+  --json-null: #a3a3a3;
+  --json-punct: #949494;
 }
 
 /* ---------- Scale tokens ---------- */
@@ -692,23 +697,31 @@ pre::-webkit-scrollbar-thumb:hover {
   max-width: 34ch;
 }
 
-/* Syntax highlighting: shades of gray plus weight and style */
+/*
+ * Syntax highlighting: color plus weight and style, so types stay distinct without color.
+ * Punctuation is the only text left outside the token spans, so it takes the color of
+ * the highlighted <code> itself (no extra spans). Output too large to highlight has no
+ * .hl class and stays plain text.
+ */
+pre code.hl {
+  color: var(--json-punct);
+}
 .k {
-  color: var(--syn-key);
+  color: var(--json-key);
   font-weight: 700;
 }
 .s {
-  color: var(--syn-str);
+  color: var(--json-string);
 }
 .n {
-  color: var(--syn-num);
+  color: var(--json-number);
 }
 .b {
-  color: var(--syn-bool);
+  color: var(--json-boolean);
   font-weight: 500;
 }
 .z {
-  color: var(--syn-null);
+  color: var(--json-null);
   font-style: italic;
 }
 

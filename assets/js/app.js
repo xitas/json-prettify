@@ -1,5 +1,5 @@
 /*
- * UI wiring for the JSON Formatter: reads the input, renders the result and
+ * UI wiring for JSON Prettify: reads the input, renders the result and
  * status bar, and handles toolbar actions. Pure helpers live in json-tools.js.
  */
 (function () {
@@ -99,8 +99,10 @@
 
         outEmpty.hidden = true;
         output.hidden = false;
-        if (result.length > HIGHLIGHT_LIMIT) outCode.textContent = result;
-        else outCode.innerHTML = highlight(result);
+        var highlighted = result.length <= HIGHLIGHT_LIMIT;
+        if (highlighted) outCode.innerHTML = highlight(result);
+        else outCode.textContent = result;
+        outCode.classList.toggle('hl', highlighted);
 
         var stats = measure(value);
         var outBytes = byteLen(result);

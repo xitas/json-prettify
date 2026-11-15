@@ -1,4 +1,4 @@
-# JSON Formatter
+# JSON Prettify
 
 A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste your JSON to beautify, minify and validate it right in the browser. No frameworks, no build step, and nothing is uploaded anywhere.
 
