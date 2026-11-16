@@ -735,6 +735,17 @@
     return found;
   }
 
+  // File name for downloading the output. A loaded file's name is reused (data.json ->
+  // data.formatted.json, or data.min.json when minified); otherwise formatted.json or
+  // minified.json. Characters that are not allowed in file names become "_".
+  function downloadName(sourceName, minified) {
+    var base = sourceName ? String(sourceName).replace(/^.*[\\/]/, '') : '';
+    base = base.replace(/\.[^.]*$/, '').replace(/\.(min|formatted)$/i, '');
+    base = base.replace(/[\u0000-\u001f<>:"|?*]+/g, '_').replace(/^[\s.]+|[\s.]+$/g, '');
+    if (!base) return minified ? 'minified.json' : 'formatted.json';
+    return base + (minified ? '.min.json' : '.formatted.json');
+  }
+
   // Key as shown in the tree: plain, or quoted when it would be unclear
   // (empty, surrounding spaces, quotes, backslashes, colons, control characters).
   function displayKey(key) {
@@ -796,6 +807,7 @@
     copyValueText: copyValueText,
     pathAtOffset: pathAtOffset,
     rangeOfPath: rangeOfPath,
+    downloadName: downloadName,
     displayKey: displayKey,
     scalarView: scalarView,
     countLines: countLines,

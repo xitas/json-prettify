@@ -62,6 +62,7 @@
     outMeta.innerHTML = '';
     btnCopy.disabled = true;
     btnUse.disabled = true;
+    btnDownload.disabled = true;
   }
 
   // Does all the formatting work before anything is drawn, so a failure (for example
@@ -195,6 +196,7 @@
         outMeta.innerHTML = badges(formatted.meta);
         btnCopy.disabled = false;
         btnUse.disabled = false;
+        btnDownload.disabled = false;
 
         setStatus('valid', 'Valid', fixNotice ? esc(fixNotice) : 'Valid JSON', [
           kindOf(formatted.value),
@@ -338,8 +340,8 @@
     }
   });
 
-  $('btnSample').addEventListener('click', function () { treeResetNext = true; input.value = SAMPLE; setMode('format'); });
-  $('btnClear').addEventListener('click', function () { treeResetNext = true; input.value = ''; update(); input.focus(); });
+  $('btnSample').addEventListener('click', function () { treeResetNext = true; loadedFileName = null; input.value = SAMPLE; setMode('format'); });
+  $('btnClear').addEventListener('click', function () { treeResetNext = true; loadedFileName = null; input.value = ''; update(); input.focus(); });
 
   btnUse.addEventListener('click', function () {
     if (!lastOutput) return;
@@ -372,7 +374,7 @@
     var f = e.target.files && e.target.files[0];
     if (!f) return;
     var reader = new FileReader();
-    reader.onload = function () { treeResetNext = true; input.value = String(reader.result || ''); setMode('format'); };
+    reader.onload = function () { treeResetNext = true; loadedFileName = f.name; input.value = String(reader.result || ''); setMode('format'); };
     reader.readAsText(f);
     e.target.value = '';
   });
@@ -1030,6 +1032,39 @@
   treeEl.addEventListener('mouseover', function (e) {
     var row = e.target.closest('.tree-row');
     if (row) placeRowCopy(row);
+  });
+
+  // ---- Download ----
+  // Saves the output as a .json file made in the browser (a Blob), so it works offline.
+  var btnDownload = $('btnDownload');
+  var loadedFileName = null;   // name of the file opened with "Open file", if any
+
+  function downloadOutput() {
+    if (!lastOutput) {
+      showToast('Nothing to download yet: the input needs to be valid JSON');
+      return;
+    }
+    var name = T.downloadName(loadedFileName, mode === 'minify');
+    var url = URL.createObjectURL(new Blob([lastOutput], { type: 'application/json' }));
+    var a = el('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+    showToast('Downloading ' + name);
+  }
+  btnDownload.addEventListener('click', downloadOutput);
+
+  // Ctrl/Cmd + S downloads the result instead of saving the page.
+  document.addEventListener('keydown', function (e) {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 's' || e.key === 'S')) {
+      e.preventDefault();
+      clearTimeout(timer);
+      update();
+      downloadOutput();
+    }
   });
 
   setOutView(outView, false);

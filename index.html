@@ -129,6 +129,10 @@
               <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
               <span class="label">Copy</span>
             </button>
+            <button id="btnDownload" class="btn-sm" type="button" title="Save as a .json file (Ctrl/Cmd + S)">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+              <span>Download</span>
+            </button>
             <button id="btnUse" class="btn-sm" type="button" title="Replace the input with this result">
               <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
               <span>Use as input</span>
@@ -191,7 +195,8 @@
 
   <footer class="foot">
     <span class="combo"><kbd>Ctrl</kbd> + <kbd>Enter</kbd></span> formats the input,
-    <span class="combo"><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Enter</kbd></span> fixes broken JSON
+    <span class="combo"><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Enter</kbd></span> fixes broken JSON,
+    <span class="combo"><kbd>Ctrl</kbd> + <kbd>S</kbd></span> downloads the result
     (use <kbd>&#x2318;</kbd> instead of <kbd>Ctrl</kbd> on a Mac).
     In the tree, click a key or press <kbd>C</kbd> to copy its path, and <span class="combo"><kbd>Shift</kbd> + <kbd>C</kbd></span> to copy its value.
   </footer>

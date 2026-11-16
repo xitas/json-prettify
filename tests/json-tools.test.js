@@ -30,7 +30,7 @@ test('exports every helper', () => {
   for (const name of ['fmtBytes', 'byteLen', 'esc', 'describeError', 'findSyntaxError', 'sortKeys', 'measure', 'kindOf',
     'countLines', 'lineNumbers', 'gutterDigits', 'highlight', 'repairJson', 'summarizeRepairs',
     'groupDigits', 'containerInfo', 'listChildren', 'childPath', 'displayKey', 'scalarView',
-    'formatPath', 'pathLabels', 'valueAtPath', 'copyValueText', 'pathAtOffset', 'rangeOfPath']) {
+    'formatPath', 'pathLabels', 'valueAtPath', 'copyValueText', 'pathAtOffset', 'rangeOfPath', 'downloadName']) {
     assert.equal(typeof T[name], 'function', name);
   }
 });
@@ -630,6 +630,34 @@ describe('pathAtOffset and rangeOfPath (Code view)', () => {
 
   test('rangeOfPath returns null for a missing path', () => {
     assert.equal(T.rangeOfPath('{"a": 1}', ['b']), null);
+  });
+});
+
+describe('downloadName', () => {
+  test('reuses a loaded file name', () => {
+    assert.equal(T.downloadName('data.json', false), 'data.formatted.json');
+    assert.equal(T.downloadName('data.json', true), 'data.min.json');
+    assert.equal(T.downloadName('export.txt', false), 'export.formatted.json');
+    assert.equal(T.downloadName('notes', false), 'notes.formatted.json');
+    assert.equal(T.downloadName('archive.tar.json', true), 'archive.tar.min.json');
+  });
+
+  test('does not stack suffixes', () => {
+    assert.equal(T.downloadName('data.min.json', false), 'data.formatted.json');
+    assert.equal(T.downloadName('data.formatted.json', true), 'data.min.json');
+    assert.equal(T.downloadName('data.formatted.json', false), 'data.formatted.json');
+  });
+
+  test('defaults when there is no file name', () => {
+    assert.equal(T.downloadName(null, false), 'formatted.json');
+    assert.equal(T.downloadName('', true), 'minified.json');
+    assert.equal(T.downloadName('.json', false), 'formatted.json');
+  });
+
+  test('strips folders and characters not allowed in file names', () => {
+    assert.equal(T.downloadName('C:\\fakepath\\my data.json', false), 'my data.formatted.json');
+    assert.equal(T.downloadName('a:b?c*.json', false), 'a_b_c_.formatted.json');
+    assert.equal(T.downloadName('\u00e9t\u00e9 ' + String.fromCodePoint(0x1f600) + '.json', false), '\u00e9t\u00e9 ' + String.fromCodePoint(0x1f600) + '.formatted.json');
   });
 });
 

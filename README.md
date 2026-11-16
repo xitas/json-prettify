@@ -16,9 +16,9 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 - **Tree view** of the output: fold and unfold objects and arrays, expand to a level, and move around with the keyboard; large arrays show 100 items at a time
 - **Copy path or value** of any node as JavaScript, JSONPath, jq or JSON Pointer: click a key, use the copy icon, or press `C` / `Shift + C` in the tree; a breadcrumb shows where you are
 - **Syntax highlighting** for keys, strings, numbers, booleans and null
-- **Copy** the result, or use it as the new input
+- **Copy** the result, **download** it as a `.json` file (a loaded `data.json` saves as `data.formatted.json` or `data.min.json`), or use it as the new input
 - **Open a file** from your device, or load a sample to try it out
-- Keyboard shortcuts: `Ctrl/Cmd + Enter` to format, `Ctrl/Cmd + Shift + Enter` to fix broken JSON
+- Keyboard shortcuts: `Ctrl/Cmd + Enter` to format, `Ctrl/Cmd + Shift + Enter` to fix broken JSON, `Ctrl/Cmd + S` to download the result
 
 ## Project structure
 
