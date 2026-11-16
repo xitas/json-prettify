@@ -29,7 +29,8 @@ const SAMPLE = {
 test('exports every helper', () => {
   for (const name of ['fmtBytes', 'byteLen', 'esc', 'describeError', 'findSyntaxError', 'sortKeys', 'measure', 'kindOf',
     'countLines', 'lineNumbers', 'gutterDigits', 'highlight', 'repairJson', 'summarizeRepairs',
-    'groupDigits', 'containerInfo', 'listChildren', 'childPath', 'displayKey', 'scalarView']) {
+    'groupDigits', 'containerInfo', 'listChildren', 'childPath', 'displayKey', 'scalarView',
+    'formatPath', 'pathLabels', 'valueAtPath', 'copyValueText', 'pathAtOffset', 'rangeOfPath']) {
     assert.equal(typeof T[name], 'function', name);
   }
 });
@@ -446,6 +447,189 @@ describe('childPath', () => {
     };
     walk(doc, '');
     assert.ok(checked > 30);
+  });
+});
+
+// ---------- path formats ----------
+
+// Independent resolvers, one per format, used to check formatPath.
+const RESOLVE = {
+  // Real JavaScript evaluation of root + path.
+  js: (root, path) => new Function('root', 'return root' + (path === '' || path[0] === '[' ? '' : '.') + path)(root),
+  jsonpath: (root, path) => {
+    assert.equal(path[0], '$', path);
+    let v = root, rest = path.slice(1);
+    const re = /^(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[(\d+)\]|\[("(?:[^"\\]|\\.)*")\])/;
+    while (rest) {
+      const m = re.exec(rest);
+      assert.ok(m, `bad JSONPath segment in ${path} at ${rest}`);
+      v = m[1] !== undefined ? v[m[1]] : m[2] !== undefined ? v[+m[2]] : v[JSON.parse(m[3])];
+      rest = rest.slice(m[0].length);
+    }
+    return v;
+  },
+  jq: (root, path) => {
+    assert.equal(path[0], '.', path);
+    if (path === '.') return root;
+    let v = root, rest = path;
+    const re = /^(?:\.([A-Za-z_][A-Za-z0-9_]*)|\.("(?:[^"\\]|\\.)*")|\.?\[(\d+)\])/;
+    while (rest) {
+      const m = re.exec(rest);
+      assert.ok(m, `bad jq segment in ${path} at ${rest}`);
+      v = m[1] !== undefined ? v[m[1]] : m[2] !== undefined ? v[JSON.parse(m[2])] : v[+m[3]];
+      rest = rest.slice(m[0].length);
+    }
+    return v;
+  },
+  // RFC 6901
+  pointer: (root, path) => {
+    if (path === '') return root;
+    assert.equal(path[0], '/', path);
+    let v = root;
+    for (const token of path.slice(1).split('/')) {
+      const key = token.replace(/~1/g, '/').replace(/~0/g, '~');
+      if (Array.isArray(v)) { assert.match(key, /^(0|[1-9]\d*)$/); v = v[+key]; }
+      else { assert.ok(Object.prototype.hasOwnProperty.call(v, key), `missing ${key}`); v = v[key]; }
+    }
+    return v;
+  }
+};
+
+const TRICKY_KEYS = ['plain', 'with space', 'a.b', 'say "hi"', 'back\\slash', 'til~de', 'sl/ash', '~1', '~0/~1',
+  String.fromCodePoint(0x1f600), '', '0', '12', '__proto__', 'constructor', 'toString', '$dollar', '_under',
+  'tab\there', 'line\nbreak', 'été', '[x]', "o'k", 'jq\\(interp)', '-', '1e3'];
+
+// A document whose keys are all tricky, built from JSON text so "__proto__" is a real key.
+function trickyDoc() {
+  const obj = (keys, leaf) => '{' + keys.map((k, i) => JSON.stringify(k) + ':' + leaf(i)).join(',') + '}';
+  const inner = i => obj(TRICKY_KEYS, j => i * 100 + j);
+  return JSON.parse('{' + TRICKY_KEYS.map((k, i) => JSON.stringify(k) + ':' + inner(i)).join(',') +
+    ',"list":[' + inner(99) + ',[1,[2,{"' + 'deep key' + '":true}]],null,"text"]}');
+}
+
+function allPaths(root) {
+  const out = [];
+  (function walk(v, parts) {
+    out.push({ parts, value: v });
+    const info = T.containerInfo(v);
+    if (info) for (const c of T.listChildren(v, 0, info.count, info.keys)) walk(c.value, parts.concat(c.key));
+  })(root, []);
+  return out;
+}
+
+describe('formatPath', () => {
+  test('examples in each format', () => {
+    const parts = ['data', 'users', 2, 'email'];
+    assert.equal(T.formatPath(parts, 'js'), 'data.users[2].email');
+    assert.equal(T.formatPath(parts, 'jsonpath'), '$.data.users[2].email');
+    assert.equal(T.formatPath(parts, 'jq'), '.data.users[2].email');
+    assert.equal(T.formatPath(parts, 'pointer'), '/data/users/2/email');
+  });
+
+  test('keys that need quoting', () => {
+    const parts = ['data', 'odd key', 0];
+    assert.equal(T.formatPath(parts, 'js'), 'data["odd key"][0]');
+    assert.equal(T.formatPath(parts, 'jsonpath'), '$.data["odd key"][0]');
+    assert.equal(T.formatPath(parts, 'jq'), '.data."odd key"[0]');
+    assert.equal(T.formatPath(parts, 'pointer'), '/data/odd key/0');
+  });
+
+  test('JSON Pointer escapes ~ as ~0 and / as ~1', () => {
+    assert.equal(T.formatPath(['a/b', '~', 'x~/y'], 'pointer'), '/a~1b/~0/x~0~1y');
+  });
+
+  test('the root in each format', () => {
+    assert.deepEqual(['js', 'jsonpath', 'jq', 'pointer'].map(f => T.formatPath([], f)), ['', '$', '.', '']);
+  });
+
+  test('a root array starts with an index', () => {
+    assert.equal(T.formatPath([0, 'id'], 'js'), '[0].id');
+    assert.equal(T.formatPath([0, 'id'], 'jq'), '.[0].id');
+    assert.equal(T.formatPath([0, 'id'], 'jsonpath'), '$[0].id');
+  });
+
+  test('__proto__, numeric keys and $ are quoted where a plain name would be wrong', () => {
+    assert.equal(T.formatPath(['__proto__'], 'js'), '["__proto__"]');
+    assert.equal(T.formatPath(['0'], 'js'), '["0"]');
+    assert.equal(T.formatPath(['0'], 'jq'), '."0"');
+    assert.equal(T.formatPath(['$ref'], 'js'), '$ref');
+    assert.equal(T.formatPath(['$ref'], 'jsonpath'), '$["$ref"]');
+  });
+
+  for (const format of ['js', 'jsonpath', 'jq', 'pointer']) {
+    test(`every path in a document of tricky keys resolves back to its value (${format})`, () => {
+      const doc = trickyDoc();
+      const paths = allPaths(doc);
+      assert.ok(paths.length > 700, `${paths.length} paths`);
+      for (const { parts, value } of paths) {
+        const path = T.formatPath(parts, format);
+        assert.strictEqual(RESOLVE[format](doc, path), value, `${format}: ${path}`);
+      }
+    });
+  }
+
+  test('the tree row path (childPath) matches the JavaScript format', () => {
+    for (const { parts } of allPaths(trickyDoc())) {
+      let p = '';
+      for (const k of parts) p = T.childPath(p, k, typeof k === 'number');
+      assert.equal(p, T.formatPath(parts, 'js'));
+    }
+  });
+});
+
+describe('pathLabels, valueAtPath and copyValueText', () => {
+  test('breadcrumb labels', () => {
+    assert.deepEqual(T.pathLabels(['data', 'users', 2, 'email']), ['root', 'data', 'users', '[2]', 'email']);
+    assert.deepEqual(T.pathLabels(['', 'a:b']), ['root', '""', '"a:b"']);
+  });
+
+  test('valueAtPath finds every value and only own keys', () => {
+    const doc = trickyDoc();
+    for (const { parts, value } of allPaths(doc)) assert.strictEqual(T.valueAtPath(doc, parts), value);
+    assert.equal(T.valueAtPath({ a: 1 }, ['constructor']), undefined);
+    assert.equal(T.valueAtPath({ a: 1 }, ['toString']), undefined);
+    assert.equal(T.valueAtPath([1], [1]), undefined);
+    assert.equal(T.valueAtPath([1], ['0']), undefined);
+    assert.equal(T.valueAtPath({ a: [1] }, ['a', 0, 'x']), undefined);
+  });
+
+  test('copyValueText: formatted JSON for containers, raw text for plain values', () => {
+    assert.equal(T.copyValueText({ a: [1] }, 2), '{\n  "a": [\n    1\n  ]\n}');
+    assert.equal(T.copyValueText([1, 2], '\t'), '[\n\t1,\n\t2\n]');
+    assert.equal(T.copyValueText('it\'s "raw"\n'), 'it\'s "raw"\n');
+    assert.equal(T.copyValueText(-1.5e-7), '-1.5e-7');
+    assert.equal(T.copyValueText(true), 'true');
+    assert.equal(T.copyValueText(null), 'null');
+  });
+});
+
+describe('pathAtOffset and rangeOfPath (Code view)', () => {
+  for (const [label, indent] of [['2 spaces', 2], ['tab', '\t'], ['minified', undefined]]) {
+    test(`every value can be found by path and by offset (${label})`, () => {
+      const doc = trickyDoc();
+      const text = JSON.stringify(doc, null, indent);
+      for (const { parts, value } of allPaths(doc)) {
+        const range = T.rangeOfPath(text, parts);
+        assert.ok(range, JSON.stringify(parts));
+        assert.deepEqual(JSON.parse(text.slice(range.start, range.end)), JSON.parse(JSON.stringify(value)));
+        assert.deepEqual(T.pathAtOffset(text, range.start), parts, 'offset at the value start');
+        assert.deepEqual(T.pathAtOffset(text, range.end - 1), parts, 'offset at the value end');
+      }
+    });
+  }
+
+  test('an offset on a key gives the member; on punctuation, the container', () => {
+    const text = '{\n  "a": {\n    "b": 1\n  },\n  "c": [10, 20]\n}';
+    assert.deepEqual(T.pathAtOffset(text, text.indexOf('"b"')), ['a', 'b']);
+    assert.deepEqual(T.pathAtOffset(text, text.indexOf('"b"') + 3), ['a', 'b'], 'the colon after a key');
+    assert.deepEqual(T.pathAtOffset(text, text.indexOf('20')), ['c', 1]);
+    assert.deepEqual(T.pathAtOffset(text, text.indexOf(', 20')), ['c'], 'comma between items');
+    assert.deepEqual(T.pathAtOffset(text, 0), []);
+    assert.deepEqual(T.pathAtOffset(text, text.length), [], 'past the end');
+  });
+
+  test('rangeOfPath returns null for a missing path', () => {
+    assert.equal(T.rangeOfPath('{"a": 1}', ['b']), null);
   });
 });
 

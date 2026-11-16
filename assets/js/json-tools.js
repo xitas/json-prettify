@@ -600,8 +600,139 @@
   var IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
   function childPath(parentPath, key, isIndex) {
     if (isIndex) return parentPath + '[' + key + ']';
-    if (IDENTIFIER.test(key)) return parentPath ? parentPath + '.' + key : key;
+    if (IDENTIFIER.test(key) && key !== '__proto__') return parentPath ? parentPath + '.' + key : key;
     return parentPath + '[' + JSON.stringify(key) + ']';
+  }
+
+  // ---- Paths ----
+  // A path is an array of parts: strings for object keys, numbers for array indexes.
+
+  var JSONPATH_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;   // RFC 9535 shorthand (ASCII only, no $)
+
+  // Formats a path as JavaScript (data.users[2].email), JSONPath ($.data.users[2].email),
+  // jq (.data.users[2].email) or JSON Pointer (/data/users/2/email). Keys that cannot be
+  // written as plain names use the quoted form of each format.
+  function formatPath(parts, format) {
+    var out = '', i, p;
+    if (format === 'pointer') {
+      for (i = 0; i < parts.length; i++) out += '/' + String(parts[i]).replace(/~/g, '~0').replace(/\//g, '~1');
+      return out;
+    }
+    if (format === 'jq') {
+      for (i = 0; i < parts.length; i++) {
+        p = parts[i];
+        if (typeof p === 'number') out += (out ? '' : '.') + '[' + p + ']';
+        else out += '.' + (JSONPATH_NAME.test(p) ? p : JSON.stringify(p));
+      }
+      return out || '.';
+    }
+    var jsonpath = format === 'jsonpath';
+    if (jsonpath) out = '$';
+    for (i = 0; i < parts.length; i++) {
+      p = parts[i];
+      if (typeof p === 'number') out += '[' + p + ']';
+      else if (jsonpath ? JSONPATH_NAME.test(p) : IDENTIFIER.test(p) && p !== '__proto__') out += (out ? '.' : '') + p;
+      else out += '[' + JSON.stringify(p) + ']';
+    }
+    return out;
+  }
+
+  // Breadcrumb labels: "root", then keys as shown in the tree and indexes as [2].
+  function pathLabels(parts) {
+    var out = ['root'];
+    for (var i = 0; i < parts.length; i++) out.push(typeof parts[i] === 'number' ? '[' + parts[i] + ']' : displayKey(parts[i]));
+    return out;
+  }
+
+  // The value at a path, or undefined when the path does not exist. Only own keys count,
+  // so "constructor" or "__proto__" never reach Object.prototype.
+  function valueAtPath(root, parts) {
+    var v = root;
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      if (Array.isArray(v)) {
+        if (typeof p !== 'number' || p < 0 || p >= v.length) return undefined;
+      } else if (v === null || typeof v !== 'object' || typeof p !== 'string' || !Object.prototype.hasOwnProperty.call(v, p)) {
+        return undefined;
+      }
+      v = v[p];
+    }
+    return v;
+  }
+
+  // Text for "Copy value": formatted JSON for objects and arrays, the raw value otherwise
+  // (a string without its quotes).
+  function copyValueText(v, indent) {
+    if (v !== null && typeof v === 'object') return JSON.stringify(v, null, indent === undefined ? 2 : indent);
+    return typeof v === 'string' ? v : JSON.stringify(v);
+  }
+
+  // Walks valid JSON text and calls onValue(parts, from, end, start) for every value after
+  // its children, so inner values come first. from is where the member starts (its key,
+  // for object members), start where the value starts, end is just past it. Returning
+  // true stops the walk.
+  function walkJsonValues(text, onValue) {
+    var i = 0, n = text.length, parts = [];
+    function skip() {
+      while (i < n) { var c = text.charCodeAt(i); if (c === 32 || c === 9 || c === 10 || c === 13) i++; else break; }
+    }
+    function str() {
+      i++;
+      while (i < n && text.charCodeAt(i) !== 34) i += text.charCodeAt(i) === 92 ? 2 : 1;
+      i++;
+    }
+    function value(from) {
+      skip();
+      var start = i, c = text.charAt(i);
+      if (c === '{' || c === '[') {
+        var obj = c === '{';
+        i++;
+        skip();
+        if (text.charAt(i) === (obj ? '}' : ']')) i++;
+        else {
+          for (var idx = 0; ; idx++) {
+            skip();
+            var memberStart = i;
+            if (obj) { str(); parts.push(JSON.parse(text.slice(memberStart, i))); skip(); i++; }
+            else parts.push(idx);
+            if (value(memberStart)) return true;
+            parts.pop();
+            skip();
+            if (text.charAt(i) === ',') { i++; continue; }
+            i++;
+            break;
+          }
+        }
+      } else if (c === '"') {
+        str();
+      } else {
+        while (i < n && ',]} \t\n\r'.indexOf(text.charAt(i)) === -1) i++;
+      }
+      return onValue(parts, from, i, start) === true;
+    }
+    value(0);
+  }
+
+  // Path of the innermost value at a character offset in formatted JSON text. An offset on
+  // a key gives that member's path; on punctuation or space, the enclosing container's.
+  function pathAtOffset(text, offset) {
+    var found = null;
+    walkJsonValues(text, function (parts, from, end) {
+      if (offset >= from && offset < end) { found = parts.slice(); return true; }
+    });
+    return found || [];
+  }
+
+  // Character range { start, end } of the value at a path in JSON text, or null.
+  function rangeOfPath(text, target) {
+    var found = null;
+    walkJsonValues(text, function (parts, from, end, start) {
+      if (parts.length !== target.length) return false;
+      for (var k = 0; k < parts.length; k++) if (parts[k] !== target[k]) return false;
+      found = { start: start, end: end };
+      return true;
+    });
+    return found;
   }
 
   // Key as shown in the tree: plain, or quoted when it would be unclear
@@ -659,6 +790,12 @@
     containerInfo: containerInfo,
     listChildren: listChildren,
     childPath: childPath,
+    formatPath: formatPath,
+    pathLabels: pathLabels,
+    valueAtPath: valueAtPath,
+    copyValueText: copyValueText,
+    pathAtOffset: pathAtOffset,
+    rangeOfPath: rangeOfPath,
     displayKey: displayKey,
     scalarView: scalarView,
     countLines: countLines,
