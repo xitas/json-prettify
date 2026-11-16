@@ -17,6 +17,7 @@
   --surface: #ffffff;           /* workspace card, buttons */
   --well: #f8f8f8;              /* panes and status bar inside the card */
   --tree-hover: #f3f3f3;        /* hovered and active tree rows (JSON colors keep 4.5:1 on it) */
+  --match-bg: #d4d4d4;          /* search matches (text inside uses --fg) */
   --surface-2: #f2f2f2;         /* pane headers, hovered buttons, segmented track */
   --surface-3: #e3e3e3;         /* pressed buttons */
   --fg: #1f1f1f;                /* body text: soft charcoal, not pure black */
@@ -49,6 +50,7 @@
   --surface: #282828;           /* workspace card, one step lighter than the page */
   --well: #222222;              /* panes and status bar, one step darker than the card */
   --tree-hover: #2a2a2a;
+  --match-bg: #555555;
   --surface-2: #323232;         /* pane headers, hovered buttons */
   --surface-3: #3d3d3d;         /* pressed buttons */
   --fg: #e8e8e8;                /* off-white text */
@@ -1038,6 +1040,130 @@ button.tree-copy .icon {
 }
 .copy-toast:empty {
   padding: 0;
+}
+
+/* ---------- Search ---------- */
+.btn-icon {
+  width: var(--control-h-sm);
+  padding: 0;
+}
+.btn-icon-xs {
+  width: 28px;
+  padding: 0;
+}
+.search-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--well);
+}
+.search-field {
+  position: relative;
+  flex: 1 1 140px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.search-field > .icon {
+  position: absolute;
+  left: var(--space-3);
+  color: var(--muted);
+  pointer-events: none;
+}
+.search-input {
+  width: 100%;
+  height: 32px;
+  padding: 0 96px 0 36px;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+}
+.search-input::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+.search-input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.search-input[aria-invalid="true"] {
+  border-color: var(--fg);
+  border-style: dashed;
+}
+.search-count {
+  position: absolute;
+  right: var(--space-3);
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.search-opts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  flex-basis: 100%;
+}
+.segmented-xs {
+  padding: 2px;
+}
+.segmented-xs button {
+  height: 22px;
+  padding: 0 var(--space-2);
+  font-size: 12px;
+}
+.btn-toggle[aria-pressed="true"],
+.btn-toggle[aria-pressed="true"]:hover {
+  color: var(--primary-fg);
+  background: var(--primary-bg);
+  border-color: var(--primary-bg);
+}
+.btn-toggle[aria-pressed="true"]:hover {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
+.search-note {
+  flex-basis: 100%;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--fg);
+}
+
+/* Matches: gray background, underline and the main text color (so they keep 4.5:1 over
+   any JSON color); the current match is inverted with an outline. */
+mark.m {
+  color: var(--fg);
+  background: var(--match-bg);
+  border-radius: 2px;
+  box-shadow: inset 0 -2px 0 var(--line-strong);
+}
+mark.m.current {
+  color: var(--primary-fg);
+  background: var(--primary-bg);
+  box-shadow: none;
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+::highlight(json-search) {
+  color: var(--fg);
+  background-color: var(--match-bg);
+  text-decoration: underline 2px var(--line-strong);
+}
+::highlight(json-search-current) {
+  color: var(--primary-fg);
+  background-color: var(--primary-bg);
+  text-decoration: none;
+}
+.tree-row.match-current {
+  box-shadow: inset 3px 0 0 var(--fg);
 }
 
 /* Scrollbars */

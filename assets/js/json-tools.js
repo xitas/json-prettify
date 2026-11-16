@@ -735,6 +735,226 @@
     return found;
   }
 
+  // ---- Search ----
+
+  // Builds the regular expression for a search. Returns { re } (re is null for an empty
+  // query) or { re: null, error } for an invalid regex.
+  function buildMatcher(query, opts) {
+    if (!query) return { re: null };
+    var src = opts.regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (opts.wholeWord) src = '(?<![\\p{L}\\p{N}_])(?:' + src + ')(?![\\p{L}\\p{N}_])';
+    try {
+      return { re: new RegExp(src, 'gu' + (opts.caseSensitive ? '' : 'i')) };
+    } catch (e) {
+      var msg = String(e && e.message || 'invalid pattern').replace(/^.*: /, '');
+      return { re: null, error: 'Invalid pattern: ' + msg.charAt(0).toLowerCase() + msg.slice(1) };
+    }
+  }
+
+  // Text a value is searched as: strings without quotes; numbers, true, false, null as written.
+  function searchText(v) {
+    return typeof v === 'string' ? v : JSON.stringify(v);
+  }
+
+  /*
+   * A search over parsed JSON that can run in slices. options: { scope: 'keys' | 'values' |
+   * 'both', caseSensitive, wholeWord, regex, limit (default 10000) }. Call step(budget)
+   * until it returns true; budget is how many keys/values to look at in this slice.
+   * Results: matches [{ path, where: 'key' | 'value', start, end }] in document order
+   * (start/end are offsets in the key or the value text), truncated (more than the limit)
+   * and error (invalid regex). Array indexes are not searched; empty matches are ignored.
+   * Uses its own stack, so deep nesting is fine.
+   */
+  function createSearch(root, query, options) {
+    var opts = options || {}, scope = opts.scope || 'both', limit = opts.limit || 10000;
+    var m = buildMatcher(query, opts);
+    var s = { matches: [], truncated: false, error: m.error || null, done: !m.re, step: step };
+    if (s.done) { s.step = function () { return true; }; return s; }
+    var re = m.re, keysOn = scope !== 'values', valuesOn = scope !== 'keys';
+    var parts = [], frames = [], started = false;
+
+    function scan(text, where) {
+      re.lastIndex = 0;
+      var r;
+      while ((r = re.exec(text))) {
+        if (r[0] === '') {                       // skip empty matches without looping forever
+          if (r.index >= text.length) break;
+          re.lastIndex = r.index + (text.codePointAt(r.index) > 0xffff ? 2 : 1);
+          continue;
+        }
+        if (s.matches.length >= limit) { s.truncated = true; return false; }
+        s.matches.push({ path: parts.slice(), where: where, start: r.index, end: r.index + r[0].length });
+      }
+      return true;
+    }
+    function push(v) {
+      var keys = Array.isArray(v) ? null : Object.keys(v);
+      frames.push({ v: v, keys: keys, n: keys ? keys.length : v.length, i: 0 });
+    }
+    function finish() { s.done = true; frames = []; return true; }
+
+    function step(budget) {
+      if (s.done) return true;
+      if (!started) {
+        started = true;
+        if (root !== null && typeof root === 'object') push(root);
+        else return finish(valuesOn && scan(searchText(root), 'value'));
+      }
+      while (frames.length && budget-- > 0) {
+        var f = frames[frames.length - 1];
+        if (f.i >= f.n) { frames.pop(); if (frames.length) parts.pop(); continue; }
+        var key = f.keys ? f.keys[f.i] : f.i;
+        var child = f.v[key];
+        f.i++;
+        parts.push(key);
+        if (f.keys && keysOn && !scan(key, 'key')) return finish();
+        if (child !== null && typeof child === 'object') push(child);
+        else {
+          if (valuesOn && !scan(searchText(child), 'value')) return finish();
+          parts.pop();
+        }
+      }
+      return frames.length ? false : finish();
+    }
+    return s;
+  }
+
+  // Runs a whole search at once: { matches, truncated, error }.
+  function searchJson(root, query, options) {
+    var s = createSearch(root, query, options);
+    s.step(Infinity);
+    return { matches: s.matches, truncated: s.truncated, error: s.error };
+  }
+
+  // Offset in JSON.stringify(raw) (including the opening quote) of offset k in raw.
+  function jsonStringOffset(raw, k) {
+    return JSON.stringify(raw.slice(0, k)).length - 1;
+  }
+
+  // Walks valid JSON text in document order and calls onToken(parts, where, start, end)
+  // for every key ('key', parts = the member's path) and every plain value ('value').
+  // Returning false stops. Uses its own stack.
+  function walkTokens(text, onToken) {
+    var i = 0, n = text.length, parts = [], frames = [];
+    function skip() {
+      while (i < n) { var c = text.charCodeAt(i); if (c === 32 || c === 9 || c === 10 || c === 13) i++; else break; }
+    }
+    function strEnd(p) {
+      p++;
+      while (p < n && text.charCodeAt(p) !== 34) p += text.charCodeAt(p) === 92 ? 2 : 1;
+      return p + 1;
+    }
+    function key() {
+      var ks = i, ke = strEnd(i);
+      parts.push(JSON.parse(text.slice(ks, ke)));
+      if (onToken(parts, 'key', ks, ke) === false) return false;
+      i = ke;
+      skip();
+      i++;                                       // the colon
+      return true;
+    }
+    for (;;) {
+      skip();
+      var c = text.charAt(i);
+      if (c === '{' || c === '[') {
+        var obj = c === '{';
+        i++;
+        skip();
+        if (text.charAt(i) !== (obj ? '}' : ']')) {
+          frames.push(obj);
+          if (obj) { if (!key()) return; } else parts.push(0);
+          continue;                              // read the first member's value
+        }
+        i++;                                     // empty container
+      } else {
+        var s = i;
+        if (c === '"') i = strEnd(i);
+        else while (i < n && ',]} \t\n\r'.indexOf(text.charAt(i)) === -1) i++;
+        if (onToken(parts, 'value', s, i) === false) return;
+      }
+      for (;;) {                                 // after a value: next member, or close
+        if (!frames.length) return;
+        skip();
+        if (text.charAt(i) === ',') {
+          i++;
+          skip();
+          if (frames[frames.length - 1]) { parts.pop(); if (!key()) return; } else parts[parts.length - 1]++;
+          break;
+        }
+        i++;
+        frames.pop();
+        parts.pop();
+      }
+    }
+  }
+
+  // Character ranges { start, end } in formatted JSON text for each match from a search of
+  // the same data (null when a match is not found). Offsets inside strings account for the
+  // quotes and escapes in the text.
+  function locateMatches(text, matches) {
+    var out = new Array(matches.length), k = 0;
+    if (!matches.length) return out;
+    walkTokens(text, function (parts, where, s, e) {
+      var m = matches[k];
+      while (m && m.where === where && m.path.length === parts.length && samePath(m.path, parts)) {
+        if (text.charAt(s) === '"') {
+          var raw = JSON.parse(text.slice(s, e));
+          out[k] = { start: s + jsonStringOffset(raw, m.start), end: s + jsonStringOffset(raw, m.end) };
+        } else {
+          out[k] = { start: s + m.start, end: s + m.end };
+        }
+        m = matches[++k];
+      }
+      return k < matches.length;
+    });
+    for (var j = 0; j < out.length; j++) if (!out[j]) out[j] = null;
+    return out;
+  }
+  function samePath(a, b) {
+    for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
+  // Like highlight(), with <mark class="m" data-i="..."> around the given ranges
+  // ([{ start, end, i }], sorted, within single tokens). Without syntax highlighting it
+  // only escapes the text and adds the marks.
+  function highlightMarked(text, ranges, withSyntax) {
+    var out = [], ri = 0;
+    function piece(a, b) {
+      while (a < b) {
+        while (ri < ranges.length && ranges[ri].end <= a) ri++;
+        var r = ranges[ri];
+        if (!r || r.start >= b) { out.push(esc(text.slice(a, b))); return; }
+        if (r.start > a) { out.push(esc(text.slice(a, r.start))); a = r.start; }
+        var e = Math.min(r.end, b);
+        out.push('<mark class="m" data-i="' + r.i + '">' + esc(text.slice(a, e)) + '</mark>');
+        a = e;
+      }
+    }
+    if (!withSyntax) { piece(0, text.length); return out.join(''); }
+    var last = 0, m;
+    TOKEN.lastIndex = 0;
+    while ((m = TOKEN.exec(text))) {
+      piece(last, m.index);
+      var end = m.index + m[0].length;
+      if (m[1]) {
+        var strEnd = m.index + m[1].length;
+        out.push(m[2] ? '<span class="k">' : '<span class="s">');
+        piece(m.index, strEnd);
+        out.push('</span>');
+        piece(strEnd, end);
+      } else {
+        out.push('<span class="' + (m[3] ? 'b' : m[0] === 'null' ? 'z' : 'n') + '">');
+        piece(m.index, end);
+        out.push('</span>');
+      }
+      last = end;
+    }
+    TOKEN.lastIndex = 0;
+    piece(last, text.length);
+    return out.join('');
+  }
+
   // File name for downloading the output. A loaded file's name is reused (data.json ->
   // data.formatted.json, or data.min.json when minified); otherwise formatted.json or
   // minified.json. Characters that are not allowed in file names become "_".
@@ -760,7 +980,7 @@
       if (max && v.length > max) {
         var cut = max, code = v.charCodeAt(cut - 1);
         if (code >= 0xd800 && code <= 0xdbff) cut--;
-        return { text: JSON.stringify(v.slice(0, cut)).slice(0, -1) + '\u2026"', full: full, cls: 's', truncated: true };
+        return { text: JSON.stringify(v.slice(0, cut)).slice(0, -1) + '\u2026"', full: full, cls: 's', truncated: true, cut: cut };
       }
       return { text: full, full: full, cls: 's', truncated: false };
     }
@@ -808,6 +1028,11 @@
     pathAtOffset: pathAtOffset,
     rangeOfPath: rangeOfPath,
     downloadName: downloadName,
+    createSearch: createSearch,
+    searchJson: searchJson,
+    jsonStringOffset: jsonStringOffset,
+    locateMatches: locateMatches,
+    highlightMarked: highlightMarked,
     displayKey: displayKey,
     scalarView: scalarView,
     countLines: countLines,

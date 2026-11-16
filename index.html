@@ -120,6 +120,9 @@
         <div class="pane-head">
           <span class="title" id="outTitle">Formatted</span>
           <span id="outMeta" class="badges"></span>
+          <button id="btnSearch" class="btn-sm btn-icon" type="button" aria-label="Search" aria-expanded="false" aria-controls="searchBar" title="Search (Ctrl/Cmd + F or /)">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+          </button>
           <div class="segmented segmented-sm" role="group" aria-label="Output view">
             <button id="btnViewCode" class="active" type="button" aria-pressed="true">Code</button>
             <button id="btnViewTree" type="button" aria-pressed="false">Tree</button>
@@ -138,6 +141,34 @@
               <span>Use as input</span>
             </button>
           </div>
+        </div>
+        <div class="search-bar" id="searchBar" role="search" aria-label="Search the output" hidden>
+          <div class="search-field">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+            <input id="searchInput" class="search-input" type="text" autocomplete="off" spellcheck="false" aria-label="Search keys and values" aria-describedby="searchCount searchNote" placeholder="Search keys and values">
+            <span class="search-count" id="searchCount"></span>
+          </div>
+          <button id="btnSearchPrev" class="btn-xs btn-icon-xs" type="button" aria-label="Previous match" title="Previous match (Shift + Enter)">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 15 6-6 6 6"/></svg>
+          </button>
+          <button id="btnSearchNext" class="btn-xs btn-icon-xs" type="button" aria-label="Next match" title="Next match (Enter)">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <button id="btnSearchClose" class="btn-xs btn-icon-xs" type="button" aria-label="Close search" title="Close search (Esc)">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          </button>
+          <div class="search-opts">
+            <div class="segmented segmented-xs" role="group" aria-label="Search in">
+              <button type="button" data-scope="keys" aria-pressed="false">Keys</button>
+              <button type="button" data-scope="values" aria-pressed="false">Values</button>
+              <button type="button" data-scope="both" aria-pressed="true" class="active">Both</button>
+            </div>
+            <button id="btnSearchCase" class="btn-xs btn-toggle" type="button" aria-pressed="false" title="Match case">Match case</button>
+            <button id="btnSearchWord" class="btn-xs btn-toggle" type="button" aria-pressed="false" title="Whole word">Whole word</button>
+            <button id="btnSearchRegex" class="btn-xs btn-toggle" type="button" aria-pressed="false" title="Regular expression">Regex</button>
+            <button id="btnSearchFilter" class="btn-xs btn-toggle" type="button" aria-pressed="false" title="Show only matches and the nodes that contain them">Filter</button>
+          </div>
+          <p class="search-note" id="searchNote" hidden></p>
         </div>
         <div class="path-bar" id="pathBar" hidden>
           <nav class="crumbs" id="crumbs" aria-label="Path of the selected value"></nav>
@@ -198,6 +229,8 @@
     <span class="combo"><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Enter</kbd></span> fixes broken JSON,
     <span class="combo"><kbd>Ctrl</kbd> + <kbd>S</kbd></span> downloads the result
     (use <kbd>&#x2318;</kbd> instead of <kbd>Ctrl</kbd> on a Mac).
+    <span class="combo"><kbd>Ctrl</kbd> + <kbd>F</kbd></span> (in the output) or <kbd>/</kbd> searches, with
+    <kbd>Enter</kbd> and <span class="combo"><kbd>Shift</kbd> + <kbd>Enter</kbd></span> for the next and previous match and <kbd>Esc</kbd> to close.
     In the tree, click a key or press <kbd>C</kbd> to copy its path, and <span class="combo"><kbd>Shift</kbd> + <kbd>C</kbd></span> to copy its value.
   </footer>
 </main>

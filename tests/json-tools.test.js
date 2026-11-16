@@ -30,7 +30,8 @@ test('exports every helper', () => {
   for (const name of ['fmtBytes', 'byteLen', 'esc', 'describeError', 'findSyntaxError', 'sortKeys', 'measure', 'kindOf',
     'countLines', 'lineNumbers', 'gutterDigits', 'highlight', 'repairJson', 'summarizeRepairs',
     'groupDigits', 'containerInfo', 'listChildren', 'childPath', 'displayKey', 'scalarView',
-    'formatPath', 'pathLabels', 'valueAtPath', 'copyValueText', 'pathAtOffset', 'rangeOfPath', 'downloadName']) {
+    'formatPath', 'pathLabels', 'valueAtPath', 'copyValueText', 'pathAtOffset', 'rangeOfPath', 'downloadName',
+    'createSearch', 'searchJson', 'jsonStringOffset', 'locateMatches', 'highlightMarked']) {
     assert.equal(typeof T[name], 'function', name);
   }
 });
@@ -630,6 +631,180 @@ describe('pathAtOffset and rangeOfPath (Code view)', () => {
 
   test('rangeOfPath returns null for a missing path', () => {
     assert.equal(T.rangeOfPath('{"a": 1}', ['b']), null);
+  });
+});
+
+// ---------- search ----------
+
+const SEARCH_DOC = {
+  name: 'Widget', Note: 'name of the widget', count: 42, price: 9.5, ok: true, gone: false, missing: null,
+  tags: ['red', 'Named', 'renamed'], nested: { name: 'inner', list: [{ name: 'deep' }] }, 'name tag': 'x'
+};
+const found = r => r.matches.map(m => `${m.where}:${T.formatPath(m.path, 'js')}:${m.start}-${m.end}`);
+
+describe('searchJson', () => {
+  test('both keys and values, case-insensitive by default, in document order', () => {
+    assert.deepEqual(found(T.searchJson(SEARCH_DOC, 'name')), [
+      'key:name:0-4', 'value:Note:0-4', 'value:tags[1]:0-4', 'value:tags[2]:2-6',
+      'key:nested.name:0-4', 'key:nested.list[0].name:0-4', 'key:["name tag"]:0-4']);
+  });
+
+  test('keys only and values only', () => {
+    assert.deepEqual(found(T.searchJson(SEARCH_DOC, 'name', { scope: 'keys' })),
+      ['key:name:0-4', 'key:nested.name:0-4', 'key:nested.list[0].name:0-4', 'key:["name tag"]:0-4']);
+    assert.deepEqual(found(T.searchJson(SEARCH_DOC, 'name', { scope: 'values' })),
+      ['value:Note:0-4', 'value:tags[1]:0-4', 'value:tags[2]:2-6']);
+  });
+
+  test('match case', () => {
+    assert.deepEqual(found(T.searchJson(SEARCH_DOC, 'Name', { caseSensitive: true })), ['value:tags[1]:0-4']);
+    assert.deepEqual(found(T.searchJson(SEARCH_DOC, 'note', { caseSensitive: true })), []);
+  });
+
+  test('whole word', () => {
+    assert.deepEqual(found(T.searchJson(SEARCH_DOC, 'name', { wholeWord: true })), [
+      'key:name:0-4', 'value:Note:0-4', 'key:nested.name:0-4', 'key:nested.list[0].name:0-4', 'key:["name tag"]:0-4']);
+    assert.equal(T.searchJson({ a: 'naïve naive_x naive' }, 'naive', { wholeWord: true }).matches.length, 1, 'letters with accents and _ count as word characters');
+  });
+
+  test('several matches in one text, with offsets', () => {
+    assert.deepEqual(found(T.searchJson({ a: 'abcabcab' }, 'ab')), ['value:a:0-2', 'value:a:3-5', 'value:a:6-8']);
+  });
+
+  test('regex', () => {
+    assert.deepEqual(found(T.searchJson(SEARCH_DOC, '^n.m', { regex: true, scope: 'keys' })),
+      ['key:name:0-3', 'key:nested.name:0-3', 'key:nested.list[0].name:0-3', 'key:["name tag"]:0-3']);
+    assert.deepEqual(found(T.searchJson(SEARCH_DOC, '\\d+', { regex: true })), ['value:count:0-2', 'value:price:0-1', 'value:price:2-3']);
+    assert.deepEqual(found(T.searchJson(SEARCH_DOC, 'red|deep', { regex: true, wholeWord: true })), ['value:tags[0]:0-3', 'value:nested.list[0].name:0-4']);
+  });
+
+  test('regex special characters are literal when Regex is off', () => {
+    assert.deepEqual(found(T.searchJson({ a: 'a.b (c) [d] $5 *' }, '(c) [d] $5')), ['value:a:4-14']);
+    assert.deepEqual(found(T.searchJson({ a: 'axb' }, 'a.b')), []);
+  });
+
+  test('invalid regex gives a short message, not an exception', () => {
+    for (const bad of ['(', '[a-', 'a{2,1}', '\\']) {
+      const r = T.searchJson(SEARCH_DOC, bad, { regex: true });
+      assert.deepEqual(r.matches, []);
+      assert.match(r.error, /^Invalid pattern: /, bad);
+      assert.ok(r.error.length < 80, r.error);
+    }
+  });
+
+  test('regex that can match empty text: empty matches are skipped and it never hangs', () => {
+    assert.deepEqual(found(T.searchJson({ a: 'axxbx' }, 'x*', { regex: true })), ['value:a:1-3', 'value:a:4-5']);
+    assert.deepEqual(T.searchJson(SEARCH_DOC, '^', { regex: true }).matches, []);
+    assert.deepEqual(T.searchJson({ a: String.fromCodePoint(0x1f600).repeat(3) }, '(?:)', { regex: true }).matches, []);
+  });
+
+  test('empty query finds nothing', () => {
+    assert.deepEqual(T.searchJson(SEARCH_DOC, ''), { matches: [], truncated: false, error: null });
+  });
+
+  test('numbers, booleans and null as written', () => {
+    assert.deepEqual(found(T.searchJson(SEARCH_DOC, 'true')), ['value:ok:0-4']);
+    assert.deepEqual(found(T.searchJson(SEARCH_DOC, 'null')), ['value:missing:0-4']);
+    assert.deepEqual(found(T.searchJson({ a: 1e21, b: -0.5, c: 'null' }, 'e+21')), ['value:a:1-5']);
+    assert.deepEqual(found(T.searchJson({ a: 1e21, b: -0.5, c: 'null' }, '-0.5')), ['value:b:0-4']);
+    assert.deepEqual(found(T.searchJson({ a: 'say "hi"' }, '"hi"')), ['value:a:4-8'], 'strings are searched without their quotes or escapes');
+  });
+
+  test('unicode and emoji', () => {
+    const smile = String.fromCodePoint(0x1f600);
+    const doc = { ['été ' + smile]: 'café ' + smile + smile, '日本': '日本語' };
+    assert.deepEqual(found(T.searchJson(doc, smile)), ['key:["été ' + smile + '"]:4-6', 'value:["été ' + smile + '"]:5-7', 'value:["été ' + smile + '"]:7-9']);
+    assert.deepEqual(found(T.searchJson(doc, 'ÉTÉ')), ['key:["été ' + smile + '"]:0-3'], 'case-insensitive beyond ASCII');
+    assert.equal(T.searchJson(doc, '日本').matches.length, 2);
+    assert.deepEqual(found(T.searchJson({ a: smile + 'x' }, '.x', { regex: true })), ['value:a:0-3'], '. matches a whole emoji');
+  });
+
+  test('tricky keys: every match path leads to the matched text', () => {
+    const doc = trickyDoc();
+    const r = T.searchJson(doc, '.', { regex: true, limit: 100000 });
+    assert.ok(r.matches.length > 2000);
+    for (const m of r.matches) {
+      if (m.where === 'key') assert.ok(Object.prototype.hasOwnProperty.call(T.valueAtPath(doc, m.path.slice(0, -1)), m.path.at(-1)));
+      else assert.notEqual(T.valueAtPath(doc, m.path), undefined, JSON.stringify(m.path));
+    }
+    assert.ok(r.matches.some(m => m.where === 'key' && m.path.at(-1) === '__proto__'));
+    assert.ok(r.matches.some(m => m.where === 'key' && m.path.at(-1) === 'constructor'));
+  });
+
+  test('deep nesting (100,000 levels)', () => {
+    const doc = JSON.parse('{"k":'.repeat(100000) + '"needle"' + '}'.repeat(100000));
+    const r = T.searchJson(doc, 'needle');
+    assert.equal(r.matches.length, 1);
+    assert.equal(r.matches[0].path.length, 100000);
+    assert.equal(T.searchJson(doc, 'k', { scope: 'keys' }).matches.length, 10000, 'stops at the limit');
+  });
+
+  test('stops at 10,000 matches and says there are more', () => {
+    const doc = Array.from({ length: 6000 }, (_, i) => ({ item: 'item-' + i }));
+    const r = T.searchJson(doc, 'item');
+    assert.equal(r.matches.length, 10000);
+    assert.equal(r.truncated, true);
+    assert.equal(T.searchJson(doc, 'item', { scope: 'keys' }).truncated, false);
+    assert.equal(T.searchJson(doc, 'item', { limit: 5 }).matches.length, 5);
+  });
+
+  test('running in small slices gives the same result as one run', () => {
+    const doc = trickyDoc();
+    const whole = T.searchJson(doc, 'e', { limit: 100000 });
+    const s = T.createSearch(doc, 'e', { limit: 100000 });
+    let slices = 0;
+    while (!s.step(7)) slices++;
+    assert.ok(slices > 50);
+    assert.deepEqual(s.matches, whole.matches);
+  });
+});
+
+describe('jsonStringOffset, locateMatches and highlightMarked', () => {
+  test('jsonStringOffset counts quotes and escapes', () => {
+    assert.equal(T.jsonStringOffset('abc', 2), 3);
+    assert.equal(T.jsonStringOffset('a"b\\c\nd', 6), 10);
+    assert.equal(T.jsonStringOffset('\u0001x', 1), 7);
+  });
+
+  for (const [label, indent] of [['2 spaces', 2], ['tab', '\t'], ['minified', undefined]]) {
+    test(`every match is located at its exact text in the formatted output (${label})`, () => {
+      const doc = trickyDoc();
+      const text = JSON.stringify(doc, null, indent);
+      for (const q of ['.', 'e', '"', '\\', '0']) {
+        const { matches } = T.searchJson(doc, q, { regex: q === '.', limit: 100000 });
+        const ranges = T.locateMatches(text, matches);
+        assert.equal(ranges.length, matches.length);
+        matches.forEach((m, i) => {
+          const r = ranges[i];
+          assert.ok(r, `${q}: ${JSON.stringify(m)}`);
+          const shown = text.slice(r.start, r.end);
+          const rawText = m.where === 'key' ? m.path.at(-1) : (v => typeof v === 'string' ? v : JSON.stringify(v))(T.valueAtPath(doc, m.path));
+          const expected = rawText.slice(m.start, m.end);
+          const isString = m.where === 'key' || typeof T.valueAtPath(doc, m.path) === 'string';
+          assert.equal(isString ? JSON.parse('"' + shown + '"') : shown, expected);
+        });
+      }
+    });
+  }
+
+  test('highlightMarked without ranges equals highlight()', () => {
+    const text = JSON.stringify(trickyDoc(), null, 2);
+    assert.equal(T.highlightMarked(text, [], true), T.highlight(text));
+    assert.equal(T.highlightMarked('<a & b>', [], false), '&lt;a &amp; b&gt;');
+  });
+
+  test('highlightMarked adds marks and leaves everything else as highlight() made it', () => {
+    const doc = { 'k<1>': 'a & b <c>', n: 1234, t: true };
+    const text = JSON.stringify(doc, null, 2);
+    const { matches } = T.searchJson(doc, '[<&3t]', { regex: true });
+    const ranges = T.locateMatches(text, matches).map((r, i) => ({ ...r, i }));
+    const html = T.highlightMarked(text, ranges, true);
+    assert.equal(html.replace(/<\/?mark[^>]*>/g, ''), T.highlight(text));
+    assert.equal((html.match(/<mark /g) || []).length, matches.length);
+    assert.ok(html.includes('<span class="k">"k<mark class="m" data-i="0">&lt;</mark>1&gt;"</span>'), html.slice(0, 120));
+    assert.ok(html.includes('<span class="n">12<mark class="m" data-i="'));
+    const plain = T.highlightMarked(text, ranges, false);
+    assert.equal(plain.replace(/<\/?mark[^>]*>/g, ''), T.esc(text));
   });
 });
 
