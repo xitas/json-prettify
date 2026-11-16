@@ -556,6 +556,76 @@
     return Math.max(2, String(Math.max(1, Math.floor(count) || 1)).length);
   }
 
+  // ---- Tree view helpers ----
+
+  // 10000 -> "10,000"
+  function groupDigits(n) {
+    var s = String(Math.floor(Math.abs(n))), out = '';
+    while (s.length > 3) { out = ',' + s.slice(-3) + out; s = s.slice(0, -3); }
+    return (n < 0 ? '-' : '') + s + out;
+  }
+
+  // Describes an object or array for the tree ({ kind, count, keys, brief, empty, label });
+  // returns null for strings, numbers, booleans and null.
+  function containerInfo(v) {
+    if (v === null || typeof v !== 'object') return null;
+    if (Array.isArray(v)) {
+      return { kind: 'array', count: v.length, keys: null, brief: '[\u2026]', empty: '[]',
+        label: groupDigits(v.length) + (v.length === 1 ? ' item' : ' items') };
+    }
+    var keys = Object.keys(v);
+    return { kind: 'object', count: keys.length, keys: keys, brief: '{\u2026}', empty: '{}',
+      label: groupDigits(keys.length) + (keys.length === 1 ? ' key' : ' keys') };
+  }
+
+  // Children start..end-1 of an object or array as [{ key, isIndex, value }].
+  // Pass the object's keys (from containerInfo) to avoid listing them again.
+  function listChildren(v, start, end, keys) {
+    var out = [], i;
+    start = Math.max(0, start || 0);
+    if (Array.isArray(v)) {
+      end = Math.min(end, v.length);
+      for (i = start; i < end; i++) out.push({ key: i, isIndex: true, value: v[i] });
+      return out;
+    }
+    if (v === null || typeof v !== 'object') return out;
+    keys = keys || Object.keys(v);
+    end = Math.min(end, keys.length);
+    for (i = start; i < end; i++) out.push({ key: keys[i], isIndex: false, value: v[keys[i]] });
+    return out;
+  }
+
+  // Path of a child in JavaScript notation: data.users[2].email, ["odd key"], [0].
+  // The root has the path "".
+  var IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+  function childPath(parentPath, key, isIndex) {
+    if (isIndex) return parentPath + '[' + key + ']';
+    if (IDENTIFIER.test(key)) return parentPath ? parentPath + '.' + key : key;
+    return parentPath + '[' + JSON.stringify(key) + ']';
+  }
+
+  // Key as shown in the tree: plain, or quoted when it would be unclear
+  // (empty, surrounding spaces, quotes, backslashes, colons, control characters).
+  function displayKey(key) {
+    return key === '' || /^\s|\s$|["\\:\u0000-\u001f]/.test(key) ? JSON.stringify(key) : key;
+  }
+
+  // Text and highlight class for a scalar value. Strings longer than max characters
+  // are cut (never inside a surrogate pair) and marked truncated; full is the whole text.
+  function scalarView(v, max) {
+    if (typeof v === 'string') {
+      var full = JSON.stringify(v);
+      if (max && v.length > max) {
+        var cut = max, code = v.charCodeAt(cut - 1);
+        if (code >= 0xd800 && code <= 0xdbff) cut--;
+        return { text: JSON.stringify(v.slice(0, cut)).slice(0, -1) + '\u2026"', full: full, cls: 's', truncated: true };
+      }
+      return { text: full, full: full, cls: 's', truncated: false };
+    }
+    var text = JSON.stringify(v);
+    return { text: text, full: text, cls: v === null ? 'z' : typeof v === 'boolean' ? 'b' : 'n', truncated: false };
+  }
+
   function kindOf(v) {
     if (Array.isArray(v)) return 'array of ' + v.length + (v.length === 1 ? ' item' : ' items');
     if (v === null) return 'null';
@@ -585,6 +655,12 @@
     sortKeys: sortKeys,
     measure: measure,
     kindOf: kindOf,
+    groupDigits: groupDigits,
+    containerInfo: containerInfo,
+    listChildren: listChildren,
+    childPath: childPath,
+    displayKey: displayKey,
+    scalarView: scalarView,
     countLines: countLines,
     lineNumbers: lineNumbers,
     gutterDigits: gutterDigits,

@@ -28,7 +28,8 @@ const SAMPLE = {
 
 test('exports every helper', () => {
   for (const name of ['fmtBytes', 'byteLen', 'esc', 'describeError', 'findSyntaxError', 'sortKeys', 'measure', 'kindOf',
-    'countLines', 'lineNumbers', 'gutterDigits', 'highlight']) {
+    'countLines', 'lineNumbers', 'gutterDigits', 'highlight', 'repairJson', 'summarizeRepairs',
+    'groupDigits', 'containerInfo', 'listChildren', 'childPath', 'displayKey', 'scalarView']) {
     assert.equal(typeof T[name], 'function', name);
   }
 });
@@ -328,6 +329,165 @@ describe('gutterDigits', () => {
     assert.equal(T.gutterDigits(9999), 4);
     assert.equal(T.gutterDigits(10000), 5);
     assert.equal(T.gutterDigits(0), 2);
+  });
+});
+
+// ---------- tree view helpers ----------
+
+describe('groupDigits', () => {
+  test('adds thousands separators', () => {
+    assert.deepEqual([0, 7, 999, 1000, 10000, 1234567, -2500].map(T.groupDigits), ['0', '7', '999', '1,000', '10,000', '1,234,567', '-2,500']);
+  });
+});
+
+describe('containerInfo', () => {
+  test('objects: count, keys in order and summary', () => {
+    const info = T.containerInfo({ b: 1, a: 2, c: { d: 1 }, e: [], f: null });
+    assert.deepEqual(info, { kind: 'object', count: 5, keys: ['b', 'a', 'c', 'e', 'f'], brief: '{…}', empty: '{}', label: '5 keys' });
+  });
+
+  test('arrays: count and summary with separators', () => {
+    assert.deepEqual(T.containerInfo(new Array(120).fill(0)), { kind: 'array', count: 120, keys: null, brief: '[…]', empty: '[]', label: '120 items' });
+    assert.equal(T.containerInfo(new Array(10000).fill(0)).label, '10,000 items');
+  });
+
+  test('singular and empty labels', () => {
+    assert.equal(T.containerInfo({ a: 1 }).label, '1 key');
+    assert.equal(T.containerInfo([1]).label, '1 item');
+    assert.equal(T.containerInfo({}).label, '0 keys');
+    assert.equal(T.containerInfo([]).count, 0);
+  });
+
+  test('scalars are not containers', () => {
+    for (const v of [null, 0, 'x', true, false]) assert.equal(T.containerInfo(v), null);
+  });
+
+  test('counts a "__proto__" key from the JSON', () => {
+    assert.deepEqual(T.containerInfo(JSON.parse('{"__proto__": 1, "a": 2}')).keys, ['__proto__', 'a']);
+  });
+});
+
+describe('listChildren', () => {
+  test('array slice with indexes', () => {
+    assert.deepEqual(T.listChildren(['a', 'b', 'c', 'd'], 1, 3), [
+      { key: 1, isIndex: true, value: 'b' }, { key: 2, isIndex: true, value: 'c' }]);
+  });
+
+  test('object slice in key order, using given keys', () => {
+    const v = { z: 1, a: 2, m: 3 };
+    assert.deepEqual(T.listChildren(v, 0, 2), [{ key: 'z', isIndex: false, value: 1 }, { key: 'a', isIndex: false, value: 2 }]);
+    assert.deepEqual(T.listChildren(v, 2, 10, ['z', 'a', 'm']), [{ key: 'm', isIndex: false, value: 3 }]);
+  });
+
+  test('end past the last child and start past the end', () => {
+    assert.equal(T.listChildren([1, 2], 0, 100).length, 2);
+    assert.deepEqual(T.listChildren([1, 2], 5, 10), []);
+  });
+
+  test('scalars have no children', () => {
+    assert.deepEqual(T.listChildren('text', 0, 10), []);
+    assert.deepEqual(T.listChildren(null, 0, 10), []);
+  });
+
+  test('pages through 10,000 items in order', () => {
+    const big = Array.from({ length: 10000 }, (_, i) => i);
+    const seen = [];
+    for (let start = 0; start < big.length; start += 100) seen.push(...T.listChildren(big, start, start + 100).map(c => c.value));
+    assert.deepEqual(seen, big);
+  });
+
+  test('a "__proto__" key keeps its own value', () => {
+    const v = T.sortKeys(JSON.parse('{"b": 1, "__proto__": {"x": 1}}'));
+    assert.deepEqual(T.listChildren(v, 0, 10), [{ key: '__proto__', isIndex: false, value: { x: 1 } }, { key: 'b', isIndex: false, value: 1 }]);
+  });
+});
+
+describe('childPath', () => {
+  test('builds paths like data.users[2].email', () => {
+    let p = T.childPath('', 'data', false);
+    p = T.childPath(p, 'users', false);
+    p = T.childPath(p, 2, true);
+    assert.equal(T.childPath(p, 'email', false), 'data.users[2].email');
+  });
+
+  test('root arrays start with an index', () => {
+    assert.equal(T.childPath(T.childPath('', 0, true), 'id', false), '[0].id');
+  });
+
+  test('keys that are not identifiers use bracket notation', () => {
+    assert.equal(T.childPath('a', 'with space', false), 'a["with space"]');
+    assert.equal(T.childPath('a', '1st', false), 'a["1st"]');
+    assert.equal(T.childPath('', '', false), '[""]');
+    assert.equal(T.childPath('a', 'say "hi"', false), 'a["say \\"hi\\""]');
+    assert.equal(T.childPath('a', 'dash-key', false), 'a["dash-key"]');
+    assert.equal(T.childPath('', '$ref', false), '$ref');
+  });
+
+  test('every path in a document leads back to its value', () => {
+    // Small resolver for the path syntax above (used by the copy-path feature later).
+    const resolve = (root, path) => {
+      const re = /^(?:\.?([A-Za-z_$][A-Za-z0-9_$]*)|\[(\d+)\]|\[("(?:[^"\\]|\\.)*")\])/;
+      let v = root, rest = path;
+      while (rest) {
+        const m = re.exec(rest);
+        assert.ok(m, `cannot read ${rest}`);
+        v = v[m[1] !== undefined ? m[1] : m[2] !== undefined ? +m[2] : JSON.parse(m[3])];
+        rest = rest.slice(m[0].length);
+      }
+      return v;
+    };
+    const doc = { ...SAMPLE, 'odd key': [{ 'a.b': 1, '': 2, 'q"': [true] }] };
+    let checked = 0;
+    const walk = (v, path) => {
+      assert.deepEqual(resolve(doc, path), v, path);
+      checked++;
+      const info = T.containerInfo(v);
+      if (info) for (const c of T.listChildren(v, 0, info.count, info.keys)) walk(c.value, T.childPath(path, c.key, c.isIndex));
+    };
+    walk(doc, '');
+    assert.ok(checked > 30);
+  });
+});
+
+describe('displayKey', () => {
+  test('plain keys are shown as is', () => {
+    for (const k of ['name', 'with space', 'dash-key', 'été', '1']) assert.equal(T.displayKey(k), k);
+  });
+
+  test('unclear keys are quoted', () => {
+    assert.equal(T.displayKey(''), '""');
+    assert.equal(T.displayKey(' padded '), '" padded "');
+    assert.equal(T.displayKey('a:b'), '"a:b"');
+    assert.equal(T.displayKey('say "hi"'), '"say \\"hi\\""');
+    assert.equal(T.displayKey('tab\there'), '"tab\\there"');
+  });
+});
+
+describe('scalarView', () => {
+  test('text and class for each scalar type', () => {
+    assert.deepEqual(T.scalarView('hi', 80), { text: '"hi"', full: '"hi"', cls: 's', truncated: false });
+    assert.deepEqual(T.scalarView(-1.5e-7, 80), { text: '-1.5e-7', full: '-1.5e-7', cls: 'n', truncated: false });
+    assert.deepEqual(T.scalarView(true, 80), { text: 'true', full: 'true', cls: 'b', truncated: false });
+    assert.deepEqual(T.scalarView(null, 80), { text: 'null', full: 'null', cls: 'z', truncated: false });
+  });
+
+  test('long strings are cut with an ellipsis and keep the full text', () => {
+    const s = 'x'.repeat(200);
+    const view = T.scalarView(s, 80);
+    assert.equal(view.text, '"' + 'x'.repeat(80) + '…"');
+    assert.equal(view.full, JSON.stringify(s));
+    assert.equal(view.truncated, true);
+  });
+
+  test('cutting never splits an emoji or an escape', () => {
+    const emoji = String.fromCodePoint(0x1f600);
+    const view = T.scalarView('a'.repeat(79) + emoji + 'tail', 80);
+    assert.equal(view.text, '"' + 'a'.repeat(79) + '…"');
+    assert.equal(T.scalarView('\n'.repeat(100), 3).text, '"\\n\\n\\n…"');
+  });
+
+  test('strings at the limit are not cut', () => {
+    assert.equal(T.scalarView('x'.repeat(80), 80).truncated, false);
   });
 });
 

@@ -120,6 +120,10 @@
         <div class="pane-head">
           <span class="title" id="outTitle">Formatted</span>
           <span id="outMeta" class="badges"></span>
+          <div class="segmented segmented-sm" role="group" aria-label="Output view">
+            <button id="btnViewCode" class="active" type="button" aria-pressed="true">Code</button>
+            <button id="btnViewTree" type="button" aria-pressed="false">Tree</button>
+          </div>
           <div class="actions">
             <button id="btnCopy" class="btn-sm" type="button">
               <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
@@ -136,6 +140,22 @@
             <div class="code-rows">
               <div class="gutter" id="outGutter" aria-hidden="true"><div class="gutter-track" id="outGutterTrack" data-lines="1"></div></div>
               <pre><code id="outCode"></code></pre>
+            </div>
+          </div>
+          <div id="outTreeView" class="tree-view" hidden>
+            <div class="tree-bar" role="group" aria-label="Tree controls">
+              <button id="btnTreeExpand" class="btn-xs" type="button">Expand all</button>
+              <button id="btnTreeCollapse" class="btn-xs" type="button">Collapse all</button>
+              <span class="tree-levels" role="group" aria-labelledby="treeLevelLabel">
+                <span class="tree-bar-label" id="treeLevelLabel">Open to level</span>
+                <button class="btn-xs btn-level" type="button" data-level="1" aria-label="Expand to level 1">1</button>
+                <button class="btn-xs btn-level" type="button" data-level="2" aria-label="Expand to level 2">2</button>
+                <button class="btn-xs btn-level" type="button" data-level="3" aria-label="Expand to level 3">3</button>
+              </span>
+            </div>
+            <p class="tree-note" id="treeNote" role="status" hidden></p>
+            <div class="tree-scroll">
+              <div id="outTree" class="tree" role="tree" aria-label="Formatted JSON as a tree"></div>
             </div>
           </div>
           <div id="outEmpty" class="empty" data-kind="empty" hidden>

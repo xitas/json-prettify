@@ -16,6 +16,7 @@
   --bg: #f3f3f3;                /* page */
   --surface: #ffffff;           /* workspace card, buttons */
   --well: #f8f8f8;              /* panes and status bar inside the card */
+  --tree-hover: #f3f3f3;        /* hovered and active tree rows (JSON colors keep 4.5:1 on it) */
   --surface-2: #f2f2f2;         /* pane headers, hovered buttons, segmented track */
   --surface-3: #e3e3e3;         /* pressed buttons */
   --fg: #1f1f1f;                /* body text: soft charcoal, not pure black */
@@ -47,6 +48,7 @@
   --bg: #1c1c1c;                /* page: soft charcoal */
   --surface: #282828;           /* workspace card, one step lighter than the page */
   --well: #222222;              /* panes and status bar, one step darker than the card */
+  --tree-hover: #2a2a2a;
   --surface-2: #323232;         /* pane headers, hovered buttons */
   --surface-3: #3d3d3d;         /* pressed buttons */
   --fg: #e8e8e8;                /* off-white text */
@@ -722,31 +724,223 @@ textarea::placeholder {
   background: var(--primary-bg);
 }
 
+/* ---------- Tree view ----------
+ * A flat list of rows (role="treeitem" with aria-level), indented by level. Faint guide
+ * lines for each ancestor are drawn with a repeating gradient sized to the indentation.
+ */
+.segmented-sm {
+  padding: 2px;
+}
+.segmented-sm button {
+  height: calc(var(--control-h-sm) - 6px);
+  padding: 0 var(--space-3);
+  font-size: var(--text-sm);
+}
+.btn-xs {
+  height: 28px;
+  padding: 0 var(--space-3);
+  font-size: 13px;
+}
+.btn-level {
+  width: 28px;
+  padding: 0;
+}
+
+.tree-view {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.tree-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
+.tree-levels {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+.tree-bar-label {
+  margin-right: var(--space-1);
+  font-size: 13px;
+  color: var(--muted);
+}
+.tree-note {
+  padding: var(--space-2) var(--space-3);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--fg);
+  border-bottom: 1px solid var(--line);
+}
+.tree-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  container-type: inline-size;
+}
+.tree {
+  --tree-indent: 20px;
+  width: max-content;
+  min-width: 100%;
+  padding: var(--space-2) 0;
+  font-family: var(--font-code);
+  font-size: 15px;
+  line-height: 24px;
+  color: var(--json-punct);
+}
+/* Blocks of up to 256 rows (see app.js). Blocks off screen skip style and layout, so trees
+   with tens of thousands of rows stay fast. Before a block is first shown it counts as 0px
+   wide (so it never widens the tree on phones) and gets an estimated height. */
+.tree-block {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 0px auto 2400px;
+}
+.tree-row {
+  --lvl: 0;
+  display: flex;
+  align-items: flex-start;
+  min-height: 24px;
+  padding: 0 var(--space-4) 0 calc(var(--space-3) + var(--lvl) * var(--tree-indent));
+  white-space: pre;
+  cursor: default;
+  background-image: repeating-linear-gradient(to right,
+    transparent 0 9px, var(--line) 9px 10px, transparent 10px var(--tree-indent));
+  background-size: calc(var(--lvl) * var(--tree-indent)) 100%;
+  background-position: var(--space-3) 0;
+  background-repeat: no-repeat;
+}
+.tree-row[aria-expanded],
+.tree-more {
+  cursor: pointer;
+}
+/* The focused row is the active one. (A :focus-within rule on .tree would restyle every
+   row whenever focus enters or leaves the tree, which is slow with thousands of rows.) */
+.tree-row:hover,
+.tree-row:focus {
+  background-color: var(--tree-hover);
+}
+.tree-row:focus {
+  outline: none;
+}
+.tree-row:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* Chevron: the row's ::before, drawn with two borders. It points right when closed and
+   down when open; leaf rows keep the space but draw nothing. Its center (9.5px into the
+   row) lines up with the guide lines of the rows below. */
+.tree-row::before {
+  content: "";
+  flex: none;
+  box-sizing: border-box;
+  width: 7px;
+  height: 7px;
+  margin: 8px 7px 0 6px;
+  border: solid transparent;
+  border-width: 0 2px 2px 0;
+  transform: rotate(-45deg);
+  transition: transform var(--dur) var(--ease);
+}
+.tree-row[aria-expanded]::before {
+  border-color: var(--muted);
+}
+.tree-row[aria-expanded]:hover::before {
+  border-color: var(--fg);
+}
+.tree-row[aria-expanded="true"]::before {
+  transform: translateY(-2px) rotate(45deg);
+}
+
+.tree-key::after,
+.tree-index::after {
+  content: ": ";
+  color: var(--json-punct);
+  font-weight: 400;
+}
+.tree-index {
+  color: var(--muted);
+}
+.tree-row[aria-expanded="true"] > .tree-brief {
+  display: none;
+}
+.tree-count {
+  margin-left: var(--space-2);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--muted);
+}
+.tree-row[aria-expanded="true"] > .tree-count {
+  margin-left: 0;
+}
+
+/* Long strings: cut with an ellipsis; shown in full while focused or when pinned */
+.tree-val.full {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  width: min(72ch, max(24ch, calc(100cqi - (var(--lvl) + 1) * var(--tree-indent) - 20ch)));
+}
+.tree-str-toggle,
+.tree-more-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  margin: 2px 0 0 var(--space-2);
+  padding: 0 var(--space-2);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1;
+  color: var(--fg);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.tree-more-btn {
+  margin-left: 0;
+}
+.tree-str-toggle:hover,
+.tree-more:hover .tree-more-btn {
+  background: var(--surface-2);
+}
+
 /* Scrollbars */
 textarea,
-.code-scroll {
+.code-scroll,
+.tree-scroll {
   scrollbar-width: thin;
   scrollbar-color: var(--scroll-thumb) var(--scroll-track);
 }
 /* For browsers without scrollbar-color (Safari) */
 textarea::-webkit-scrollbar,
+.tree-scroll::-webkit-scrollbar,
 .code-scroll::-webkit-scrollbar {
   width: 12px;
   height: 12px;
 }
 textarea::-webkit-scrollbar-track,
+.tree-scroll::-webkit-scrollbar-track,
 .code-scroll::-webkit-scrollbar-track,
 textarea::-webkit-scrollbar-corner,
+.tree-scroll::-webkit-scrollbar-corner,
 .code-scroll::-webkit-scrollbar-corner {
   background: var(--scroll-track);
 }
 textarea::-webkit-scrollbar-thumb,
+.tree-scroll::-webkit-scrollbar-thumb,
 .code-scroll::-webkit-scrollbar-thumb {
   background: var(--scroll-thumb);
   border: 3px solid var(--scroll-track);
   border-radius: var(--radius-pill);
 }
 textarea::-webkit-scrollbar-thumb:hover,
+.tree-scroll::-webkit-scrollbar-thumb:hover,
 .code-scroll::-webkit-scrollbar-thumb:hover {
   background: var(--scroll-thumb-hover);
 }

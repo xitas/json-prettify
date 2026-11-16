@@ -53,6 +53,7 @@
     lastOutput = '';
     outCode.textContent = '';
     output.hidden = true;
+    treeView.hidden = true;
     outEmpty.hidden = false;
     outEmpty.setAttribute('data-kind', kind);
     outEmptyTitle.textContent = title;
@@ -182,12 +183,14 @@
       } else {
         view = 'valid-' + mode;
         lastOutput = formatted.result;
-        outEmpty.hidden = true;
-        output.hidden = false;
+        // The tree is rebuilt only when the data could have changed (input text or Sort keys).
+        var source = text + '|' + sortBox.checked;
+        if (source !== treeSource) { treeSource = source; treeValue = formatted.value; treeDirty = true; }
         if (formatted.html !== null) outCode.innerHTML = formatted.html;
         else outCode.textContent = formatted.result;
         outCode.classList.toggle('hl', formatted.html !== null);
         setGutterLines('output', outGutter, outTrack, T.countLines(formatted.result));
+        showResult();
         outMeta.innerHTML = badges(formatted.meta);
         btnCopy.disabled = false;
         btnUse.disabled = false;
@@ -209,7 +212,7 @@
     // Fade in only when what is shown changes, not on every keystroke.
     if (view !== lastView) {
       reveal(statusEl);
-      reveal(output.hidden ? outEmpty : output);
+      reveal(!outEmpty.hidden ? outEmpty : outView === 'tree' ? treeView : output);
       lastView = view;
     }
   }
@@ -255,6 +258,7 @@
     }
     applyingFix = false;
     fixNotice = r.summary;
+    treeResetNext = true;
     fixFailure = null;
     clearTimeout(timer);
     update();
@@ -333,11 +337,12 @@
     }
   });
 
-  $('btnSample').addEventListener('click', function () { input.value = SAMPLE; setMode('format'); });
-  $('btnClear').addEventListener('click', function () { input.value = ''; update(); input.focus(); });
+  $('btnSample').addEventListener('click', function () { treeResetNext = true; input.value = SAMPLE; setMode('format'); });
+  $('btnClear').addEventListener('click', function () { treeResetNext = true; input.value = ''; update(); input.focus(); });
 
   btnUse.addEventListener('click', function () {
     if (!lastOutput) return;
+    treeResetNext = true;
     input.value = lastOutput;
     update();
   });
@@ -366,10 +371,483 @@
     var f = e.target.files && e.target.files[0];
     if (!f) return;
     var reader = new FileReader();
-    reader.onload = function () { input.value = String(reader.result || ''); setMode('format'); };
+    reader.onload = function () { treeResetNext = true; input.value = String(reader.result || ''); setMode('format'); };
     reader.readAsText(f);
     e.target.value = '';
   });
+
+  // ---- Output view: Code or Tree ----
+  var VIEW_KEY = 'json-formatter-view';
+  var treeView = $('outTreeView'), treeEl = $('outTree'), treeNote = $('treeNote');
+  var btnViewCode = $('btnViewCode'), btnViewTree = $('btnViewTree');
+  var outView = 'code';
+  try {
+    var savedView = localStorage.getItem(VIEW_KEY);
+    if (savedView === 'code' || savedView === 'tree') outView = savedView;
+  } catch (e) {}
+
+  // Shows the current result in the chosen view (only called when there is a result).
+  function showResult() {
+    outEmpty.hidden = true;
+    output.hidden = outView !== 'code';
+    treeView.hidden = outView !== 'tree';
+    if (outView === 'tree' && treeDirty) buildTree();
+  }
+
+  function setOutView(view, save) {
+    outView = view;
+    btnViewCode.classList.toggle('active', view === 'code');
+    btnViewTree.classList.toggle('active', view === 'tree');
+    btnViewCode.setAttribute('aria-pressed', String(view === 'code'));
+    btnViewTree.setAttribute('aria-pressed', String(view === 'tree'));
+    if (save) { try { localStorage.setItem(VIEW_KEY, view); } catch (e) {} }
+    if (lastOutput) { showResult(); reveal(view === 'tree' ? treeView : output); }
+  }
+  btnViewCode.addEventListener('click', function () { setOutView('code', true); });
+  btnViewTree.addEventListener('click', function () { setOutView('tree', true); });
+
+  // ---- Tree view ----
+  // A flat list of role="treeitem" rows with aria-level (grouped in blocks, see below). A node's child rows are built only
+  // when it is opened, 100 at a time; bigger jobs run in short slices so the page never
+  // freezes. Each row keeps its data in row._d and its path (data.users[2].email) in
+  // data-path, ready for copying paths later.
+  var TREE_PAGE = 100, TREE_SLICE_MS = 30, STRING_PREVIEW = 80, DEFAULT_TREE_LEVEL = 2, EXPAND_LIMIT = 50000;
+  var treeValue, treeSource = null, treeDirty = false, treeResetNext = true;
+  var treeGen = 0, activeRow = null, busyJobs = 0;
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  function setBusy(delta) {
+    busyJobs = Math.max(0, busyJobs + delta);
+    treeEl.setAttribute('aria-busy', String(busyJobs > 0));
+  }
+
+  // Builds one row. entry is { key, isIndex, value } from listChildren, or null for the root.
+  function makeRow(entry, level, parentPath, posinset, setsize) {
+    var value = entry ? entry.value : treeValue;
+    var info = T.containerInfo(value);
+    var path = entry ? T.childPath(parentPath, entry.key, entry.isIndex) : '';
+    var row = el('div', 'tree-row');
+    row.setAttribute('role', 'treeitem');
+    row.setAttribute('aria-level', level);
+    if (setsize) { row.setAttribute('aria-setsize', setsize); row.setAttribute('aria-posinset', posinset); }
+    row.setAttribute('data-path', path);
+    row.tabIndex = -1;
+    row.style.setProperty('--lvl', level - 1);
+    var d = row._d = { level: level, path: path, value: value, info: info, container: !!(info && info.count), expanded: false, shown: 0 };
+
+    // The chevron is the row's ::before and the ": " after a key is generated by CSS,
+    // which keeps each row to a few elements.
+    if (entry) {
+      if (entry.isIndex) row.appendChild(el('span', 'tree-index', String(entry.key)));
+      else row.appendChild(el('span', 'tree-key k', T.displayKey(entry.key)));
+    }
+    if (info) {
+      if (d.container) {
+        row.setAttribute('aria-expanded', 'false');
+        row.appendChild(el('span', 'tree-brief', info.brief));
+        row.appendChild(el('span', 'tree-count', info.label));
+      } else {
+        row.appendChild(el('span', 'tree-brief', info.empty));
+      }
+    } else {
+      var view = T.scalarView(value, STRING_PREVIEW);
+      var span = row.appendChild(el('span', 'tree-val ' + view.cls, view.text));
+      if (view.truncated) {
+        d.short = view.text;
+        d.full = view.full;
+        d.pinned = false;
+        span.title = view.full.length > 10000 ? view.full.slice(0, 10000) + '\u2026' : view.full;
+        row.appendChild(el('span', 'tree-str-toggle', 'more'));
+      }
+    }
+    return row;
+  }
+
+  function makeMoreRow(parent, kind, label) {
+    var row = el('div', 'tree-row tree-more');
+    row.setAttribute('role', 'treeitem');
+    row.setAttribute('aria-level', parent._d.level + 1);
+    row.tabIndex = -1;
+    row.style.setProperty('--lvl', parent._d.level);
+    row.appendChild(el('span', 'tree-more-btn', label));
+    row._d = { level: parent._d.level + 1, more: kind, parent: parent };
+    return row;
+  }
+
+  // Rows for children from..to-1 of parent, in a fragment.
+  function childFragment(parent, from, to) {
+    var d = parent._d, frag = document.createDocumentFragment(), rows = [];
+    var entries = T.listChildren(d.value, from, to, d.info.keys);
+    for (var i = 0; i < entries.length; i++) {
+      rows.push(frag.appendChild(makeRow(entries[i], d.level + 1, d.path, from + i + 1, d.info.count)));
+    }
+    d.shown = from + entries.length;
+    return { frag: frag, rows: rows };
+  }
+
+  // "Show 100 more" / "Show all" rows for children not built yet.
+  function moreFragment(parent) {
+    var d = parent._d, left = d.info.count - d.shown, frag = document.createDocumentFragment();
+    if (left <= 0) return frag;
+    frag.appendChild(makeMoreRow(parent, 'page', 'Show ' + T.groupDigits(Math.min(left, TREE_PAGE)) + ' more'));
+    if (left > TREE_PAGE) frag.appendChild(makeMoreRow(parent, 'all', 'Show all (' + T.groupDigits(left) + ' more)'));
+    return frag;
+  }
+
+  // ---- Rows are kept in blocks of up to BLOCK_MAX ----
+  // The rows form one flat list in document order, split across <div role="none"> blocks.
+  // Blocks carry content-visibility: auto, so the browser skips whole blocks that are off
+  // screen and an insert only dirties one block: the cost of a frame no longer grows with
+  // the number of rows. These helpers step through rows across block boundaries.
+  var BLOCK_MAX = 256;
+
+  function makeBlock() {
+    var b = el('div', 'tree-block');
+    b.setAttribute('role', 'none');
+    return b;
+  }
+  function nonEmpty(b, forward) {
+    while (b && !b.firstElementChild) b = forward ? b.nextElementSibling : b.previousElementSibling;
+    return b;
+  }
+  function nextRow(row) {
+    if (row.nextElementSibling) return row.nextElementSibling;
+    var b = nonEmpty(row.parentNode.nextElementSibling, true);
+    return b ? b.firstElementChild : null;
+  }
+  function prevRow(row) {
+    if (row.previousElementSibling) return row.previousElementSibling;
+    var b = nonEmpty(row.parentNode.previousElementSibling, false);
+    return b ? b.lastElementChild : null;
+  }
+  function firstRow() {
+    var b = nonEmpty(treeEl.firstElementChild, true);
+    return b ? b.firstElementChild : null;
+  }
+  function lastRow() {
+    var b = nonEmpty(treeEl.lastElementChild, false);
+    return b ? b.lastElementChild : null;
+  }
+  function removeRow(row) {
+    var b = row.parentNode;
+    row.remove();
+    if (!b.firstElementChild) b.remove();
+  }
+
+  // Inserts a fragment of rows right after row, keeping blocks small. Big fragments get
+  // blocks of their own; small ones go into row's block, which is halved first if full.
+  function insertRowsAfter(row, frag) {
+    var block = row.parentNode, n = frag.childElementCount;
+    if (!n) return;
+    var range = document.createRange();
+    if (n >= BLOCK_MAX / 4) {
+      var place = block;
+      if (row.nextElementSibling) {                     // move rows after row to a new block
+        var tail = makeBlock();
+        range.setStartAfter(row);
+        range.setEndAfter(block.lastElementChild);
+        tail.appendChild(range.extractContents());
+        block.after(tail);
+      }
+      while (frag.firstElementChild) {
+        var nb = makeBlock();
+        for (var k = 0; k < BLOCK_MAX && frag.firstElementChild; k++) nb.appendChild(frag.firstElementChild);
+        place.after(nb);
+        place = nb;
+      }
+      return;
+    }
+    if (block.childElementCount + n > BLOCK_MAX) {      // split the full block in half
+      var second = makeBlock();
+      range.setStartBefore(block.children[block.childElementCount >> 1]);
+      range.setEndAfter(block.lastElementChild);
+      second.appendChild(range.extractContents());
+      block.after(second);
+    }
+    row.after(frag);
+  }
+
+  // The first row after row's descendants (or null at the end).
+  function afterDescendants(row) {
+    var n = nextRow(row), level = row._d.level;
+    while (n && n._d.level > level) n = nextRow(n);
+    return n;
+  }
+
+  function parentRow(row) {
+    var p = prevRow(row), level = row._d.level;
+    while (p && p._d.level >= level) p = prevRow(p);
+    return p;
+  }
+
+  // The direct child rows of an open row that are themselves openable.
+  function childContainers(row) {
+    var out = [], level = row._d.level, n = nextRow(row);
+    for (; n && n._d.level > level; n = nextRow(n)) {
+      if (n._d.level === level + 1 && n._d.container) out.push(n);
+    }
+    return out;
+  }
+
+  // Opens a row and builds its first page of children; returns the new child rows.
+  function expandRow(row) {
+    var d = row._d;
+    if (!d.container || d.expanded) return [];
+    d.expanded = true;
+    row.setAttribute('aria-expanded', 'true');
+    var c = childFragment(row, 0, TREE_PAGE);
+    c.frag.appendChild(moreFragment(row));
+    insertRowsAfter(row, c.frag);
+    return c.rows;
+  }
+
+  // Closes a row and removes everything inside it, so nothing inside stays open.
+  function collapseRow(row) {
+    var d = row._d;
+    if (!d.expanded) return;
+    var hadFocus = treeEl.contains(document.activeElement);
+    var end = afterDescendants(row);
+    if (row === firstRow() && !end) {
+      treeEl.textContent = '';          // closing the root: clear everything in one step
+      treeEl.appendChild(makeBlock()).appendChild(row);
+    } else if (nextRow(row) && nextRow(row) !== end) {
+      // A range from after row to before end removes the rows between, across blocks.
+      var range = document.createRange();
+      range.setStartAfter(row);
+      if (end) range.setEndBefore(end); else range.setEndAfter(treeEl.lastElementChild);
+      range.deleteContents();
+      var b = row.parentNode.nextElementSibling;       // drop blocks the range emptied
+      var stop = end ? end.parentNode : null;
+      while (b && b !== stop) { var nb = b.nextElementSibling; if (!b.firstElementChild) b.remove(); b = nb; }
+    }
+    d.expanded = false;
+    d.shown = 0;
+    d.token = (d.token || 0) + 1; // stops a "Show all" still running for this row
+    row.setAttribute('aria-expanded', 'false');
+    if (activeRow && !activeRow.isConnected) setActive(row, hadFocus);
+  }
+
+  // Opens rows breadth-first, in slices of a few milliseconds. shouldOpen(d) decides which.
+  // Starting another job (or collapsing everything) cancels the previous one.
+  // With a limit, it stops after building that many new rows and says so in the tree bar:
+  // every row is laid out on each frame, so tens of thousands would make the page sluggish.
+  function expandTree(rows, shouldOpen, done, limit) {
+    var gen = ++treeGen, queue = rows.slice(), qi = 0, created = 0;
+    setTreeNote('');
+    setBusy(1);
+    (function step() {
+      if (gen !== treeGen) { setBusy(-1); return; }
+      var t0 = performance.now();
+      while (qi < queue.length && performance.now() - t0 < TREE_SLICE_MS) {
+        if (limit && created >= limit) {
+          qi = queue.length;
+          setTreeNote('Stopped after opening ' + T.groupDigits(created) + ' rows to keep the page responsive. Open nodes one at a time to see more.');
+          break;
+        }
+        var row = queue[qi++];
+        if (!row.isConnected || !row._d.container || !shouldOpen(row._d)) continue;
+        var opening = !row._d.expanded;
+        var kids = opening ? expandRow(row) : childContainers(row);
+        if (opening) created += row._d.shown;
+        for (var k = 0; k < kids.length; k++) if (kids[k]._d.container) queue.push(kids[k]);
+      }
+      if (qi < queue.length) { setTimeout(step, 0); return; }
+      setBusy(-1);
+      if (done) done();
+    })();
+  }
+
+  function setTreeNote(text) {
+    treeNote.textContent = text;
+    treeNote.hidden = !text;
+  }
+
+  // Builds the next page (or all) of a node's children, replacing its "Show more" rows.
+  function showMore(moreRow) {
+    var parent = moreRow._d.parent, d = parent._d, all = moreRow._d.more === 'all';
+    var hadFocus = treeEl.contains(document.activeElement);
+    var first = moreRow;
+    while (prevRow(first) && prevRow(first)._d.parent === parent) first = prevRow(first);
+    var after = prevRow(first);                        // the last row shown for parent
+    for (var r = first; r && r._d.parent === parent;) { var following = nextRow(r); removeRow(r); r = following; }
+    var target = all ? d.info.count : Math.min(d.info.count, d.shown + TREE_PAGE);
+    var token = d.token = (d.token || 0) + 1, firstNew = null;
+    setBusy(1);
+    (function step() {
+      if (d.token !== token || !parent.isConnected) { setBusy(-1); return; }
+      if (!after.isConnected) { var end = afterDescendants(parent); after = end ? prevRow(end) : lastRow(); }
+      var t0 = performance.now();
+      while (d.shown < target && performance.now() - t0 < TREE_SLICE_MS) {
+        var c = childFragment(parent, d.shown, Math.min(target, d.shown + 250));
+        var last = c.rows[c.rows.length - 1];
+        insertRowsAfter(after, c.frag);
+        after = last;
+        if (!firstNew) {
+          firstNew = c.rows[0];
+          if (hadFocus || !activeRow || !activeRow.isConnected) setActive(firstNew, hadFocus);
+        }
+      }
+      if (d.shown < target) { setTimeout(step, 0); return; }
+      insertRowsAfter(after, moreFragment(parent));
+      setBusy(-1);
+    })();
+  }
+
+  // Shows a long string in full (while focused, or pinned with "more") or cut short.
+  function showFullString(row, on) {
+    var d = row._d, span = row.querySelector('.tree-val');
+    span.textContent = on ? d.full : d.short;
+    span.classList.toggle('full', on);
+  }
+  function pinString(row) {
+    var d = row._d;
+    d.pinned = !d.pinned;
+    row.querySelector('.tree-str-toggle').textContent = d.pinned ? 'less' : 'more';
+    showFullString(row, d.pinned || document.activeElement === row);
+  }
+
+  // Roving tabindex: only the active row can be reached with Tab.
+  function setActive(row, focus) {
+    if (activeRow && activeRow !== row && activeRow.isConnected) activeRow.tabIndex = -1;
+    activeRow = row;
+    row.tabIndex = 0;
+    if (focus) row.focus();
+  }
+
+  function toggleRow(row, deep) {
+    var d = row._d;
+    if (!d.container) return;
+    if (d.expanded) collapseRow(row);
+    else if (deep) expandTree([row], function () { return true; }, null, EXPAND_LIMIT);
+    else expandRow(row);
+  }
+
+  function activate(row, deep) {
+    var d = row._d;
+    if (d.more) showMore(row);
+    else if (d.full) pinString(row);
+    else toggleRow(row, deep);
+  }
+
+  function rootRow() { return firstRow(); }
+
+  // Opens containers down to the given aria-level (1 = only the root).
+  function openToLevel(level) {
+    var root = rootRow();
+    if (!root) return;
+    treeGen++;
+    collapseRow(root);
+    expandTree([root], function (d) { return d.level <= level; }, null, EXPAND_LIMIT);
+  }
+
+  // Rebuilds the tree for treeValue. While the user is typing, rows that were open stay
+  // open; after loading new data, the first two levels open.
+  function buildTree() {
+    var keep = null, activePath = null;
+    if (!treeResetNext && rootRow()) {
+      keep = {};
+      var open = treeEl.querySelectorAll('[aria-expanded="true"]');
+      for (var i = 0; i < open.length; i++) keep[open[i]._d.path] = true;
+      if (activeRow && activeRow.isConnected && activeRow._d.path !== undefined) activePath = activeRow._d.path;
+    }
+    treeResetNext = false;
+    treeDirty = false;
+    treeGen++;
+    treeEl.textContent = '';
+    activeRow = null;
+    var root = makeRow(null, 1, '');
+    treeEl.appendChild(makeBlock()).appendChild(root);
+    setActive(root, false);
+    if (keep) {
+      // If none of the previously open nodes (below the root) exist any more, this is new
+      // data rather than an edit, so open the default levels instead.
+      var matched = 0;
+      expandTree([root], function (d) {
+        var hit = keep[d.path] === true;
+        if (hit && d.path !== '') matched++;
+        return hit;
+      }, function () {
+        if (!matched) { expandTree([root], function (d) { return d.level <= DEFAULT_TREE_LEVEL; }); return; }
+        if (activePath === null) return;
+        var match = treeEl.querySelector('[data-path="' + (window.CSS && CSS.escape ? CSS.escape(activePath) : activePath) + '"]');
+        if (match) setActive(match, false);
+      });
+    } else {
+      expandTree([root], function (d) { return d.level <= DEFAULT_TREE_LEVEL; });
+    }
+  }
+
+  treeEl.addEventListener('mousedown', function (e) {
+    // Shift or Alt + click opens a whole branch; don't let it select text instead.
+    var row = e.target.closest('.tree-row');
+    if (row && row._d.container && (e.shiftKey || e.altKey)) e.preventDefault();
+  });
+
+  treeEl.addEventListener('click', function (e) {
+    var row = e.target.closest('.tree-row');
+    if (!row) return;
+    setActive(row, true);
+    if (row._d.more) showMore(row);
+    else if (e.target.closest('.tree-str-toggle')) pinString(row);
+    else if (row._d.container) toggleRow(row, e.shiftKey || e.altKey);
+  });
+
+  treeEl.addEventListener('focusin', function (e) {
+    var row = e.target.closest('.tree-row');
+    if (!row) return;
+    if (row !== activeRow) setActive(row, false);
+    if (row._d.full && !row._d.pinned) showFullString(row, true);
+  });
+  treeEl.addEventListener('focusout', function (e) {
+    var row = e.target.closest && e.target.closest('.tree-row');
+    if (row && row._d.full && !row._d.pinned && row.isConnected) showFullString(row, false);
+  });
+
+  // WAI-ARIA tree keyboard pattern.
+  treeEl.addEventListener('keydown', function (e) {
+    var row = e.target.closest('.tree-row');
+    if (!row || e.ctrlKey || e.metaKey || e.altKey) return;
+    var d = row._d, next = null;
+    switch (e.key) {
+      case 'ArrowDown': next = nextRow(row); break;
+      case 'ArrowUp': next = prevRow(row); break;
+      case 'Home': next = firstRow(); break;
+      case 'End': next = lastRow(); break;
+      case 'ArrowRight':
+        if (d.container && !d.expanded) expandRow(row);
+        else if (d.expanded && nextRow(row) && nextRow(row)._d.level > d.level) next = nextRow(row);
+        break;
+      case 'ArrowLeft':
+        if (d.expanded) collapseRow(row);
+        else next = parentRow(row);
+        break;
+      case 'Enter':
+      case ' ':
+        activate(row, e.shiftKey);
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    if (next) setActive(next, true);
+  });
+
+  $('btnTreeExpand').addEventListener('click', function () {
+    if (rootRow()) expandTree([rootRow()], function () { return true; }, null, EXPAND_LIMIT);
+  });
+  $('btnTreeCollapse').addEventListener('click', function () { openToLevel(0); });
+  var levelButtons = treeView.querySelectorAll('[data-level]');
+  for (var lb = 0; lb < levelButtons.length; lb++) {
+    levelButtons[lb].addEventListener('click', function () { openToLevel(+this.getAttribute('data-level')); });
+  }
+
+  setOutView(outView, false);
 
   // Theme toggle. The inline script in index.html sets data-theme before first paint;
   // this keeps the button label, color-scheme meta and saved choice in sync.

@@ -13,6 +13,7 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 - **Validate** as you type, with the error message and the exact line and column
 - **Go to error** button that jumps to the problem in the input
 - **Sort keys** alphabetically (applies to nested objects too)
+- **Tree view** of the output: fold and unfold objects and arrays, expand to a level, and move around with the keyboard; large arrays show 100 items at a time
 - **Syntax highlighting** for keys, strings, numbers, booleans and null
 - **Copy** the result, or use it as the new input
 - **Open a file** from your device, or load a sample to try it out
