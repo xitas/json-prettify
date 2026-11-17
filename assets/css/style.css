@@ -1128,6 +1128,28 @@ button.tree-copy .icon {
   padding: 0;
 }
 
+/* ---------- Options for the CSV and TypeScript output ---------- */
+.format-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--well);
+}
+.field-sm .field-label,
+.check-sm {
+  font-size: 13px;
+}
+.check-sm {
+  height: 28px;
+}
+.check-sm input {
+  width: 16px;
+  height: 16px;
+}
+
 /* ---------- Share panel (privacy note, size warnings, opening links) ---------- */
 .share-panel {
   display: flex;
@@ -1353,6 +1375,7 @@ textarea::-webkit-scrollbar-thumb:hover,
   stroke-width: 1.75;
 }
 .empty[data-kind="empty"] .icon-error,
+.empty[data-kind="info"] .icon-error,
 .empty[data-kind="error"] .icon-empty {
   display: none;
 }

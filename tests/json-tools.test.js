@@ -33,7 +33,7 @@ test('exports every helper', () => {
     'formatPath', 'pathLabels', 'valueAtPath', 'copyValueText', 'pathAtOffset', 'rangeOfPath', 'downloadName',
     'createSearch', 'searchJson', 'jsonStringOffset', 'locateMatches', 'highlightMarked',
     'crc32', 'base64urlEncode', 'base64urlDecode', 'canCompress', 'encodeShare', 'decodeShare', 'parseShareSettings', 'shareLinkCheck',
-    'renderTokens', 'searchText', 'yamlPlain', 'toYaml', 'yamlTokens']) {
+    'renderTokens', 'searchText', 'yamlPlain', 'toYaml', 'yamlTokens', 'toCsv', 'csvTokens']) {
     assert.equal(typeof T[name], 'function', name);
   }
 });
@@ -967,6 +967,131 @@ describe('searchText', () => {
     assert.deepEqual(T.searchText('name name2', 'name', { wholeWord: true }).matches, [{ start: 0, end: 4 }]);
     assert.match(T.searchText('x', '(', { regex: true }).error, /^Invalid pattern/);
     assert.equal(T.searchText('a'.repeat(20), 'a', { limit: 5 }).truncated, true);
+  });
+});
+
+// ---------- CSV ----------
+
+// An independent RFC 4180 reader for checking the CSV output.
+function readCsv(text, d = ',') {
+  const rows = [[]];
+  let field = '', i = 0, quoted = false;
+  while (i < text.length) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') { field += '"'; i += 2; continue; }
+      if (c === '"') { quoted = false; i++; continue; }
+      field += c; i++; continue;
+    }
+    if (c === '"' && field === '') { quoted = true; i++; continue; }
+    if (c === d) { rows.at(-1).push(field); field = ''; i++; continue; }
+    if (c === '\r' && text[i + 1] === '\n') { rows.at(-1).push(field); field = ''; rows.push([]); i += 2; continue; }
+    assert.notEqual(c, '"', 'a quote inside an unquoted field');
+    assert.ok(c !== '\n' && c !== '\r', 'a line break outside quotes');
+    field += c; i++;
+  }
+  rows.at(-1).push(field);
+  return rows;
+}
+
+describe('toCsv', () => {
+  test('an array of objects: one row each, columns in first-seen order, missing keys empty', () => {
+    const { text } = T.toCsv([{ id: 1, name: 'Amina' }, { name: 'Bilal', admin: true }, { id: 3 }]);
+    assert.equal(text, 'id,name,admin\r\n1,Amina,\r\n,Bilal,true\r\n3,,');
+  });
+
+  test('nested objects flatten to dotted names; arrays and empty objects become JSON text', () => {
+    const { text } = T.toCsv([{ user: { name: 'A', address: { city: 'X' } }, tags: ['a', 'b'], meta: {}, list: [] }]);
+    assert.deepEqual(readCsv(text), [['user.name', 'user.address.city', 'tags', 'meta', 'list'], ['A', 'X', '["a","b"]', '{}', '[]']]);
+  });
+
+  test('values: numbers as written, booleans, null as an empty cell', () => {
+    assert.deepEqual(readCsv(T.toCsv([{ n: 1.5, big: 1e21, neg: -2, z: 0, t: true, f: false, nil: null }]).text),
+      [['n', 'big', 'neg', 'z', 't', 'f', 'nil'], ['1.5', '1e+21', '-2', '0', 'true', 'false', '']]);
+  });
+
+  test('RFC 4180 quoting for delimiters, quotes and line breaks', () => {
+    const rows = [{ a: 'x,y', b: 'say "hi"', c: 'line1\nline2', d: 'cr\rhere', e: 'crlf\r\nhere', f: 'plain', g: ' spaced ' }];
+    const { text } = T.toCsv(rows);
+    assert.ok(text.endsWith('\r\n"x,y","say ""hi""","line1\nline2","cr\rhere","crlf\r\nhere",plain, spaced '), JSON.stringify(text));
+    assert.deepEqual(readCsv(text)[1], Object.values(rows[0]));
+  });
+
+  test('each delimiter', () => {
+    const rows = [{ a: 'x,y', b: 'p;q', c: 't\tu', d: 'plain' }];
+    for (const d of [',', ';', '\t']) {
+      const { text } = T.toCsv(rows, { delimiter: d });
+      assert.deepEqual(readCsv(text, d), [['a', 'b', 'c', 'd'], ['x,y', 'p;q', 't\tu', 'plain']], JSON.stringify(d));
+      const quotedCells = text.split('\r\n')[1].split(d === '\t' ? /\t(?=(?:[^"]*"[^"]*")*[^"]*$)/ : d).filter(c => c.startsWith('"')).length;
+      assert.equal(quotedCells, 1, `only the cell holding ${JSON.stringify(d)} is quoted`);
+    }
+  });
+
+  test('formula protection is on by default for text cells and headers', () => {
+    const rows = [{ '=cmd': '=SUM(A1:A9)', b: '+1', c: '-x', d: '@here', e: '\tTab', f: '\rCR', g: 'safe', n: -5, m: 1 }];
+    const [head, row] = readCsv(T.toCsv(rows).text);
+    assert.deepEqual(head, ["'=cmd", 'b', 'c', 'd', 'e', 'f', 'g', 'n', 'm']);
+    assert.deepEqual(row, ["'=SUM(A1:A9)", "'+1", "'-x", "'@here", "'\tTab", "'\rCR", 'safe', '-5', '1'], 'numbers stay numbers');
+  });
+
+  test('formula protection off leaves cells as they are', () => {
+    const [head, row] = readCsv(T.toCsv([{ '=cmd': '=SUM(A1)', b: '@x' }], { protect: false }).text);
+    assert.deepEqual(head, ['=cmd', 'b']);
+    assert.deepEqual(row, ['=SUM(A1)', '@x']);
+  });
+
+  test('a single object becomes one row', () => {
+    assert.equal(T.toCsv({ a: 1, b: { c: 'x' } }).text, 'a,b.c\r\n1,x');
+  });
+
+  test('an array of plain values becomes one value column', () => {
+    assert.deepEqual(readCsv(T.toCsv(['a', 1, true, null, 'x,y']).text), [['value'], ['a'], ['1'], ['true'], [''], ['x,y']]);
+  });
+
+  test('mixed rows: different keys, nesting depths and value types in the same column', () => {
+    const { text } = T.toCsv([{ a: 1 }, { a: { b: 2 } }, { a: [1] }, { a: 'x', c: null }]);
+    assert.deepEqual(readCsv(text), [['a', 'a.b', 'c'], ['1', '', ''], ['', '2', ''], ['[1]', '', ''], ['x', '', '']]);
+  });
+
+  test('unicode and emoji pass through', () => {
+    const smile = String.fromCodePoint(0x1f600);
+    const { text } = T.toCsv([{ ['café']: '日本 ' + smile, ok: smile }]);
+    assert.deepEqual(readCsv(text), [['café', 'ok'], ['日本 ' + smile, smile]]);
+  });
+
+  test('anything else gets a short explanation', () => {
+    assert.match(T.toCsv('text').error, /^CSV needs an array of objects, but this JSON is a string\.$/);
+    assert.match(T.toCsv(null).error, /is null/);
+    assert.match(T.toCsv([[1, 2], [3]]).error, /contains arrays/);
+    assert.match(T.toCsv([{ a: 1 }, 2]).error, /mixes objects with other values/);
+    assert.match(T.toCsv([]).error, /empty/);
+  });
+
+  test('a round trip through a CSV reader for many random rows', () => {
+    let seed = 5;
+    const rand = n => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return (seed >>> 8) % n; };
+    const parts = ['a', ',', ';', '"', '\n', '\r', '\r\n', ' ', '=', '+', '-', '@', '\t', 'x', 'é', String.fromCodePoint(0x1f600), "'"];
+    const str = () => Array.from({ length: rand(5) }, () => parts[rand(parts.length)]).join('');
+    for (let round = 0; round < 300; round++) {
+      const keys = Array.from({ length: 1 + rand(4) }, (_, k) => 'k' + k + str().replace(/[.]/g, ''));
+      const rows = Array.from({ length: 1 + rand(4) }, () => Object.fromEntries(keys.filter(() => rand(4)).map(k => [k, str()])));
+      for (const d of [',', ';', '\t']) {
+        const res = T.toCsv(rows, { delimiter: d, protect: false });
+        if (res.error) continue;                       // every row empty
+        const table = readCsv(res.text, d);
+        const head = table[0];
+        rows.forEach((r, i) => head.forEach((h, j) => assert.equal(table[i + 1][j], r[h] === undefined ? '' : r[h])));
+      }
+    }
+  });
+});
+
+describe('csvTokens', () => {
+  test('header as keys, then numbers, booleans and text', () => {
+    const text = T.toCsv([{ name: 'A,B', n: 1.5, ok: true, z: null }]).text;
+    assert.deepEqual(T.csvTokens(text).map(t => t.cls + ':' + text.slice(t.start, t.end)), ['k:name', 'k:n', 'k:ok', 'k:z', 's:"A,B"', 'n:1.5', 'b:true']);
+    const semi = T.toCsv([{ a: 'x' }], { delimiter: ';' }).text;
+    assert.deepEqual(T.csvTokens(semi, ';').map(t => t.cls), ['k', 's']);
   });
 });
 

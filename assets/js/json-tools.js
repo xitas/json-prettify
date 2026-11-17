@@ -1167,6 +1167,110 @@
     return tokens;
   }
 
+  // ---- CSV ----
+
+  function isPlainObject(v) { return v !== null && typeof v === 'object' && !Array.isArray(v); }
+
+  // Flattens an object into dotted column names (user.name). Arrays and empty objects stay
+  // whole and become JSON text in the cell.
+  function flattenRow(obj, prefix, row, columns, seen) {
+    var keys = Object.keys(obj);
+    for (var i = 0; i < keys.length; i++) {
+      var name = prefix ? prefix + '.' + keys[i] : keys[i], v = obj[keys[i]];
+      if (isPlainObject(v) && Object.keys(v).length) { flattenRow(v, name, row, columns, seen); continue; }
+      if (!seen.has(name)) { seen.add(name); columns.push(name); }
+      row.set(name, v);
+    }
+  }
+
+  // RFC 4180 field: quoted when it holds the delimiter, a quote or a line break. With
+  // protect on, text starting with = + - @ tab or carriage return gets a ' in front, so a
+  // spreadsheet shows it instead of running it as a formula.
+  function csvField(v, delimiter, protect) {
+    var s, fromText = false;
+    if (v === undefined || v === null) s = '';
+    else if (typeof v === 'string') { s = v; fromText = true; }
+    else if (typeof v === 'object') s = JSON.stringify(v);
+    else s = String(v === 0 && 1 / v < 0 ? 0 : v);
+    if (protect && fromText && /^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    if (s.indexOf(delimiter) !== -1 || /["\r\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  }
+
+  function describeKind(v) {
+    if (v === null) return 'null';
+    if (Array.isArray(v)) return 'an array';
+    if (typeof v === 'object') return 'an object';
+    return 'a ' + typeof v;
+  }
+
+  // Converts JSON to CSV. options: { delimiter: ',' | ';' | '\t', protect: true }.
+  // Works on an array of objects (one row each, columns in the order keys first appear), a
+  // single object (one row) or an array of plain values (a "value" column). Returns
+  // { text } or { error } with a short explanation.
+  function toCsv(value, options) {
+    var opts = options || {}, d = opts.delimiter || ',', protect = opts.protect !== false;
+    var items, i;
+    if (isPlainObject(value)) items = [value];
+    else if (Array.isArray(value)) items = value;
+    else return { error: 'CSV needs an array of objects, but this JSON is ' + describeKind(value) + '.' };
+    if (!items.length) return { error: 'The array is empty, so there are no rows to show as CSV.' };
+    var objects = 0, plain = 0;
+    for (i = 0; i < items.length; i++) {
+      if (isPlainObject(items[i])) objects++;
+      else if (items[i] === null || typeof items[i] !== 'object') plain++;
+    }
+    var lines = [];
+    if (plain === items.length) {
+      lines.push(csvField('value', d, protect));
+      for (i = 0; i < items.length; i++) lines.push(csvField(items[i], d, protect));
+      return { text: lines.join('\r\n') };
+    }
+    if (objects !== items.length) {
+      return { error: 'CSV needs an array of objects, but this array ' + (objects ? 'mixes objects with other values' : 'contains arrays') + '.' };
+    }
+    var columns = [], seen = new Set(), rows = [];
+    for (i = 0; i < items.length; i++) {
+      var row = new Map();
+      flattenRow(items[i], '', row, columns, seen);
+      rows.push(row);
+    }
+    lines.push(columns.map(function (c) { return csvField(c, d, protect); }).join(d));
+    for (i = 0; i < rows.length; i++) {
+      var cells = [];
+      for (var c = 0; c < columns.length; c++) cells.push(csvField(rows[i].get(columns[c]), d, protect));
+      lines.push(cells.join(d));
+    }
+    return { text: lines.join('\r\n') };
+  }
+
+  // Syntax tokens for CSV: the header row as keys; numbers, booleans and text in the rows.
+  function csvTokens(text, delimiter) {
+    var tokens = [], i = 0, n = text.length, row = 0, d = delimiter || ',';
+    while (i < n) {
+      var start = i, quoted = text.charAt(i) === '"';
+      if (quoted) {
+        for (i++; i < n; i++) {
+          if (text.charAt(i) === '"') { if (text.charAt(i + 1) === '"') i++; else { i++; break; } }
+        }
+      }
+      while (i < n && text.charAt(i) !== d && text.charAt(i) !== '\r' && text.charAt(i) !== '\n') i++;
+      if (i > start) {
+        var raw = text.slice(start, i);
+        var cls = row === 0 ? 'k' : quoted ? 's' : /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][-+]?\d+)?$/.test(raw) ? 'n' :
+          raw === 'true' || raw === 'false' ? 'b' : 's';
+        tokens.push({ start: start, end: i, cls: cls });
+      }
+      if (text.charAt(i) === d) i++;
+      else if (text.charAt(i) === '\r' || text.charAt(i) === '\n') {
+        if (text.charAt(i) === '\r' && text.charAt(i + 1) === '\n') i++;
+        i++;
+        row++;
+      }
+    }
+    return tokens;
+  }
+
   // ---- Share links ----
   // The JSON travels inside the link's hash (#...), which browsers never send to a server.
   // Format: j1=<crc32>.<base64url of deflate-raw bytes>  or  u1=<crc32>.<base64url of the
@@ -1370,6 +1474,8 @@
     yamlPlain: yamlPlain,
     toYaml: toYaml,
     yamlTokens: yamlTokens,
+    toCsv: toCsv,
+    csvTokens: csvTokens,
     downloadName: downloadName,
     crc32: crc32,
     base64urlEncode: base64urlEncode,

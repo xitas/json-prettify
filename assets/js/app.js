@@ -66,7 +66,7 @@
     btnShare.disabled = true;
     if (searchOpen) {
       searchGen++;
-      setHits([], false, null, input.value.trim() ? 'Fix the input to search it' : '');
+      setHits([], false, null, kind === 'info' ? '' : input.value.trim() ? 'Fix the input to search it' : '');
     }
   }
 
@@ -77,6 +77,19 @@
   var FORMATS = {
     json: { label: 'JSON', mime: 'application/json' },
     yaml: { label: 'YAML', mime: 'application/yaml', convert: function (v, indent) { return { text: T.toYaml(v, indent) }; }, tokens: T.yamlTokens }
+  };
+  var CSV_KEY = 'json-formatter-csv', csvOpts = { delimiter: ',', protect: true };
+  try {
+    var savedCsv = JSON.parse(localStorage.getItem(CSV_KEY) || 'null');
+    if (savedCsv && typeof savedCsv === 'object') {
+      if ([',', ';', '\t'].indexOf(savedCsv.delimiter) !== -1) csvOpts.delimiter = savedCsv.delimiter;
+      if (typeof savedCsv.protect === 'boolean') csvOpts.protect = savedCsv.protect;
+    }
+  } catch (e) {}
+  FORMATS.csv = {
+    label: 'CSV', mime: 'text/csv;charset=utf-8', bom: true,
+    convert: function (v) { return T.toCsv(v, csvOpts); },
+    tokens: function (text) { return T.csvTokens(text, csvOpts.delimiter); }
   };
   var outFormat = 'json';
   var FORMAT_KEY = 'json-formatter-format', outFormatSel = $('outFormat');
@@ -211,6 +224,17 @@
         if (err.pos !== null) actions.appendChild(statusButton('btnGoError', 'Go to error', function () { jumpTo(err); }));
         statusEl.appendChild(actions);
         showEmpty('error', 'No result yet', 'Fix the error in the input and the result appears here.');
+      } else if (formatted.unsupported) {
+        view = 'unsupported';
+        var source0 = text + '|' + sortBox.checked;
+        if (source0 !== treeSource) { treeSource = source0; treeValue = formatted.value; treeDirty = true; }
+        setStatus('valid', 'Valid', fixNotice ? esc(fixNotice) : 'Valid JSON', [
+          kindOf(formatted.value),
+          plural(formatted.stats.keys, 'key', 'keys') + ' in total',
+          'depth ' + formatted.stats.depth
+        ]);
+        showEmpty('info', 'Can\u2019t show this as ' + FORMATS[outFormat].label, formatted.unsupported);
+        btnShare.disabled = false;   // the JSON itself can still be shared
       } else {
         view = 'valid-' + mode;
         lastOutput = formatted.result;
@@ -1768,10 +1792,25 @@
   window.addEventListener('hashchange', openShareHash);
 
   // ---- Output format choice ----
+  var csvBar = $('csvBar'), csvDelimiter = $('csvDelimiter'), csvProtect = $('csvProtect');
+  csvDelimiter.value = csvOpts.delimiter === '\t' ? 'tab' : csvOpts.delimiter;
+  csvProtect.checked = csvOpts.protect;
+  function saveCsvOptions() {
+    csvOpts.delimiter = csvDelimiter.value === 'tab' ? '\t' : csvDelimiter.value;
+    csvOpts.protect = csvProtect.checked;
+    try { localStorage.setItem(CSV_KEY, JSON.stringify(csvOpts)); } catch (e) {}
+    update();
+  }
+  csvDelimiter.addEventListener('change', saveCsvOptions);
+  csvProtect.addEventListener('change', saveCsvOptions);
+  function syncFormatBars() { csvBar.hidden = outFormat !== 'csv'; }
+  syncFormatBars();
+
   outFormatSel.addEventListener('change', function () {
     outFormat = FORMATS[outFormatSel.value] ? outFormatSel.value : 'json';
     try { localStorage.setItem(FORMAT_KEY, outFormat); } catch (e) {}
     syncSearchOptions();
+    syncFormatBars();
     btnFilter.hidden = currentView() !== 'tree';
     update();
   });
@@ -1787,7 +1826,9 @@
       return;
     }
     var name = T.downloadName(loadedFileName, mode === 'minify', outFormat);
-    var url = URL.createObjectURL(new Blob([lastOutput], { type: FORMATS[outFormat].mime }));
+    // CSV starts with a UTF-8 byte order mark so Excel shows accents and emoji correctly.
+    var body = (FORMATS[outFormat].bom ? '\ufeff' : '') + lastOutput;
+    var url = URL.createObjectURL(new Blob([body], { type: FORMATS[outFormat].mime }));
     var a = el('a');
     a.href = url;
     a.download = name;

@@ -124,6 +124,7 @@
             <select id="outFormat">
               <option value="json" selected>JSON</option>
               <option value="yaml">YAML</option>
+              <option value="csv">CSV</option>
             </select>
             <svg class="icon chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg>
           </span>
@@ -153,6 +154,23 @@
               </div>
             </div>
           </div>
+        </div>
+        <div class="format-bar" id="csvBar" role="group" aria-label="CSV options" hidden>
+          <label class="field field-sm" for="csvDelimiter">
+            <span class="field-label">Delimiter</span>
+            <span class="select-wrap select-sm">
+              <select id="csvDelimiter">
+                <option value="," selected>Comma</option>
+                <option value=";">Semicolon</option>
+                <option value="tab">Tab</option>
+              </select>
+              <svg class="icon chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg>
+            </span>
+          </label>
+          <label class="check check-sm" for="csvProtect" title="Spreadsheet apps run cells that start with =, +, -, @, a tab or a carriage return as formulas, which can run commands or send data elsewhere when someone opens the file. A ' in front makes them show as plain text.">
+            <input type="checkbox" id="csvProtect" checked aria-describedby="csvProtectHelp"> Protect against spreadsheet formulas
+          </label>
+          <span class="sr-only" id="csvProtectHelp">Spreadsheet apps run cells that start with =, +, -, @, a tab or a carriage return as formulas, which can run commands or send data elsewhere when someone opens the file. A ' in front makes them show as plain text.</span>
         </div>
         <div class="share-panel" id="sharePanel" role="region" aria-label="Share link" hidden>
           <div class="share-msg" id="shareMsg" role="status"></div>

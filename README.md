@@ -17,6 +17,7 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 - **Copy path or value** of any node as JavaScript, JSONPath, jq or JSON Pointer: click a key, use the copy icon, or press `C` / `Shift + C` in the tree; a breadcrumb shows where you are
 - **Share** a link with the JSON (and your view settings) stored inside the link itself, compressed in the part after `#`, which browsers never send to a server. Nothing is uploaded; anyone with the link can see the JSON
 - **Output as JSON or YAML**, with YAML that quotes anything a YAML parser could misread
+- **Output as CSV** for an array of objects: one row per object, nested objects as `dotted.columns`, a comma, semicolon or tab delimiter, and protection against spreadsheet formula injection (on by default). Downloads include a UTF-8 byte order mark so Excel shows accents correctly
 - **Search** the output in both views: keys, values or both, match case, whole word and regex, with next/previous, a match count and a Filter that shows only matching branches of the tree
 - **Syntax highlighting** for keys, strings, numbers, booleans and null
 - **Copy** the result, **download** it as a `.json` file (a loaded `data.json` saves as `data.formatted.json` or `data.min.json`), or use it as the new input
