@@ -955,6 +955,129 @@
     return out.join('');
   }
 
+  // ---- Share links ----
+  // The JSON travels inside the link's hash (#...), which browsers never send to a server.
+  // Format: j1=<crc32>.<base64url of deflate-raw bytes>  or  u1=<crc32>.<base64url of the
+  // UTF-8 bytes> (when CompressionStream is not available), then optional settings:
+  // &i=2|4|tab (indent) &k=1|0 (sort keys) &m=f|m (format/minify) &v=c|t (code/tree view).
+  // The number after j/u is the format version. The CRC32 of the text catches links that
+  // were cut off or changed.
+  var SHARE_WARN_LENGTH = 8000, SHARE_MAX_LENGTH = 1000000;
+  var crcTable = null;
+
+  function crc32(bytes) {
+    if (!crcTable) {
+      crcTable = new Uint32Array(256);
+      for (var n = 0; n < 256; n++) {
+        var c = n;
+        for (var k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+        crcTable[n] = c >>> 0;
+      }
+    }
+    var crc = 0xffffffff;
+    for (var i = 0; i < bytes.length; i++) crc = crcTable[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
+    return ('0000000' + ((crc ^ 0xffffffff) >>> 0).toString(16)).slice(-8);
+  }
+
+  function base64urlEncode(bytes) {
+    var bin = '';
+    for (var i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  // Returns the bytes, or null when the text is not valid base64url.
+  function base64urlDecode(str) {
+    if (!/^[A-Za-z0-9_-]*$/.test(str) || str.length % 4 === 1) return null;
+    var b64 = str.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    var bin;
+    try { bin = atob(b64); } catch (e) { return null; }
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  // Whether this browser can make compressed (j1) links.
+  function canCompress() {
+    if (typeof CompressionStream !== 'function' || typeof DecompressionStream !== 'function') return false;
+    try { new CompressionStream('deflate-raw'); new DecompressionStream('deflate-raw'); return true; } catch (e) { return false; }
+  }
+
+  function pipeThrough(bytes, stream) {
+    var writer = stream.writable.getWriter();
+    writer.write(bytes).catch(function () {});
+    writer.close().catch(function () {});
+    return new Response(stream.readable).arrayBuffer().then(function (b) { return new Uint8Array(b); });
+  }
+
+  function settingsSuffix(s) {
+    var out = '';
+    if (!s) return out;
+    if (s.indent === '2' || s.indent === '4' || s.indent === 'tab') out += '&i=' + s.indent;
+    if (typeof s.sortKeys === 'boolean') out += '&k=' + (s.sortKeys ? 1 : 0);
+    if (s.mode === 'format' || s.mode === 'minify') out += '&m=' + (s.mode === 'minify' ? 'm' : 'f');
+    if (s.view === 'code' || s.view === 'tree') out += '&v=' + (s.view === 'tree' ? 't' : 'c');
+    return out;
+  }
+
+  // Reads only known settings with known values; anything else is ignored.
+  function parseShareSettings(rest) {
+    var s = {}, pairs = String(rest || '').split('&');
+    for (var i = 0; i < pairs.length; i++) {
+      var eq = pairs[i].indexOf('='), k = pairs[i].slice(0, eq), v = pairs[i].slice(eq + 1);
+      if (eq < 1) continue;
+      if (k === 'i' && (v === '2' || v === '4' || v === 'tab')) s.indent = v;
+      else if (k === 'k' && (v === '0' || v === '1')) s.sortKeys = v === '1';
+      else if (k === 'm' && (v === 'f' || v === 'm')) s.mode = v === 'm' ? 'minify' : 'format';
+      else if (k === 'v' && (v === 'c' || v === 't')) s.view = v === 't' ? 'tree' : 'code';
+    }
+    return s;
+  }
+
+  // Makes the hash part of a share link (without "#"). options.compress: true or false to
+  // force a kind (default: compressed when the browser supports it). Resolves to a string.
+  function encodeShare(text, settings, options) {
+    var bytes = new TextEncoder().encode(text), crc = crc32(bytes);
+    var compress = options && typeof options.compress === 'boolean' ? options.compress : canCompress();
+    var data = compress ? pipeThrough(bytes, new CompressionStream('deflate-raw')) : Promise.resolve(bytes);
+    return data.then(function (out) {
+      return (compress ? 'j1=' : 'u1=') + crc + '.' + base64urlEncode(out) + settingsSuffix(settings);
+    });
+  }
+
+  // Reads a share hash ("#j1=..." or "j1=..."). Resolves to null when the hash is not a share
+  // link, { ok: true, text, settings, compressed } when it opens, or { ok: false, reason }
+  // with reason 'incomplete' (cut off or damaged), 'version' (made by a newer format) or
+  // 'unsupported' (this browser cannot decompress it). Never throws.
+  function decodeShare(hash) {
+    var m = /^([ju])(\d+)=([^&]*)((?:&.*)?)$/.exec(String(hash || '').replace(/^#/, ''));
+    if (!m) return Promise.resolve(null);
+    if (m[2] !== '1') return Promise.resolve({ ok: false, reason: 'version' });
+    var fail = { ok: false, reason: 'incomplete' };
+    var crc = m[3].slice(0, 8), data = m[3].charAt(8) === '.' ? base64urlDecode(m[3].slice(9)) : null;
+    if (!/^[0-9a-f]{8}$/.test(crc) || !data) return Promise.resolve(fail);
+    var compressed = m[1] === 'j';
+    if (compressed && !canCompress()) return Promise.resolve({ ok: false, reason: 'unsupported' });
+    var bytes;
+    try {
+      bytes = compressed ? pipeThrough(data, new DecompressionStream('deflate-raw')) : Promise.resolve(data);
+    } catch (e) {
+      return Promise.resolve(fail);
+    }
+    return bytes.then(function (b) {
+      if (crc32(b) !== crc) return fail;
+      var text;
+      try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(b); } catch (e) { return fail; }
+      return { ok: true, text: text, settings: parseShareSettings(m[4]), compressed: compressed };
+    }, function () { return fail; });
+  }
+
+  // Size check for a whole share link: { length, warn (long enough that some apps may cut
+  // it off), tooBig (over the limit for sharing by link) }.
+  function shareLinkCheck(length) {
+    return { length: length, warn: length > SHARE_WARN_LENGTH, tooBig: length > SHARE_MAX_LENGTH };
+  }
+
   // File name for downloading the output. A loaded file's name is reused (data.json ->
   // data.formatted.json, or data.min.json when minified); otherwise formatted.json or
   // minified.json. Characters that are not allowed in file names become "_".
@@ -1028,6 +1151,16 @@
     pathAtOffset: pathAtOffset,
     rangeOfPath: rangeOfPath,
     downloadName: downloadName,
+    crc32: crc32,
+    base64urlEncode: base64urlEncode,
+    base64urlDecode: base64urlDecode,
+    canCompress: canCompress,
+    encodeShare: encodeShare,
+    decodeShare: decodeShare,
+    parseShareSettings: parseShareSettings,
+    shareLinkCheck: shareLinkCheck,
+    SHARE_WARN_LENGTH: SHARE_WARN_LENGTH,
+    SHARE_MAX_LENGTH: SHARE_MAX_LENGTH,
     createSearch: createSearch,
     searchJson: searchJson,
     jsonStringOffset: jsonStringOffset,

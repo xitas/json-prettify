@@ -618,6 +618,8 @@ kbd {
 }
 .pane-head .actions {
   display: flex;
+  flex-wrap: wrap;              /* the buttons wrap instead of running past the pane */
+  justify-content: flex-end;
   gap: var(--space-2);
   margin-left: auto;            /* stays right-aligned when it wraps on phones */
 }
@@ -1040,6 +1042,42 @@ button.tree-copy .icon {
 }
 .copy-toast:empty {
   padding: 0;
+}
+
+/* ---------- Share panel (privacy note, size warnings, opening links) ---------- */
+.share-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.share-msg {
+  flex: 1 1 260px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg);
+}
+.share-msg p + p {
+  margin-top: var(--space-1);
+}
+.share-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.btn-solid,
+.btn-solid:hover {
+  color: var(--primary-fg);
+  background: var(--primary-bg);
+  border-color: var(--primary-bg);
+}
+.btn-solid:hover {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
 }
 
 /* ---------- Search ---------- */

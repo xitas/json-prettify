@@ -63,6 +63,7 @@
     btnCopy.disabled = true;
     btnUse.disabled = true;
     btnDownload.disabled = true;
+    btnShare.disabled = true;
     if (searchOpen) {
       searchGen++;
       setHits([], false, null, input.value.trim() ? 'Fix the input to search it' : '');
@@ -140,6 +141,7 @@
 
   function update() {
     var text = input.value;
+    if (sharedText !== null && text !== sharedText) clearShareHash();
     var bytes = byteLen(text);
     refreshInputGutter();
     markErrorLine(null);
@@ -204,6 +206,7 @@
         btnCopy.disabled = false;
         btnUse.disabled = false;
         btnDownload.disabled = false;
+        btnShare.disabled = false;
 
         setStatus('valid', 'Valid', fixNotice ? esc(fixNotice) : 'Valid JSON', [
           kindOf(formatted.value),
@@ -324,6 +327,7 @@
   var timer = null;
   input.addEventListener('input', function () {
     refreshInputGutter(); // immediately, so numbers keep up with fast typing and pastes
+    inputDirty = true;
     if (!applyingFix) {
       // Any edit (including Ctrl+Z undoing a fix) clears the fix summary and failure note.
       fixNotice = null;
@@ -347,12 +351,13 @@
     }
   });
 
-  $('btnSample').addEventListener('click', function () { treeResetNext = true; loadedFileName = null; input.value = SAMPLE; setMode('format'); });
-  $('btnClear').addEventListener('click', function () { treeResetNext = true; loadedFileName = null; input.value = ''; update(); input.focus(); });
+  $('btnSample').addEventListener('click', function () { treeResetNext = true; loadedFileName = null; inputDirty = false; input.value = SAMPLE; setMode('format'); });
+  $('btnClear').addEventListener('click', function () { treeResetNext = true; loadedFileName = null; inputDirty = false; input.value = ''; update(); input.focus(); });
 
   btnUse.addEventListener('click', function () {
     if (!lastOutput) return;
     treeResetNext = true;
+    inputDirty = true;
     input.value = lastOutput;
     update();
   });
@@ -381,7 +386,7 @@
     var f = e.target.files && e.target.files[0];
     if (!f) return;
     var reader = new FileReader();
-    reader.onload = function () { treeResetNext = true; loadedFileName = f.name; input.value = String(reader.result || ''); setMode('format'); };
+    reader.onload = function () { treeResetNext = true; loadedFileName = f.name; inputDirty = true; input.value = String(reader.result || ''); setMode('format'); };
     reader.readAsText(f);
     e.target.value = '';
   });
@@ -1547,6 +1552,132 @@
   });
   syncSearchOptions();
 
+  // ---- Share link ----
+  // The input text (and the current settings) go into the link's hash, compressed. Browsers
+  // never send the hash to a server, so nothing is uploaded.
+  var SHARE_NOTE_KEY = 'json-formatter-share-note-seen';
+  var SITE_URL = 'https://xitas.github.io/json-prettify/';
+  var PRIVACY_NOTE = 'Anyone with this link can see the JSON. It\u2019s stored in the link, not on a server.';
+  var btnShare = $('btnShare'), sharePanel = $('sharePanel'), shareMsg = $('shareMsg'), shareActions = $('shareActions');
+  var sharedText = null;   // the input as opened from a share link, while its hash is in the address bar
+  var inputDirty = false;  // the input holds the user's own JSON (typed, pasted or opened)
+
+  // Opened from disk, a link to the local file would not work for anyone else.
+  function shareBase() {
+    return /^https?:$/.test(location.protocol) ? location.origin + location.pathname : SITE_URL;
+  }
+  function clearShareHash() {
+    sharedText = null;
+    if (/^#[ju]\d+=/.test(location.hash)) history.replaceState(null, '', location.pathname + location.search);
+  }
+
+  // Messages and choices about sharing, under the output header. Text only (no HTML).
+  function showSharePanel(paragraphs, buttons, focusFirst) {
+    shareMsg.textContent = '';
+    for (var i = 0; i < paragraphs.length; i++) shareMsg.appendChild(el('p', null, paragraphs[i]));
+    shareActions.textContent = '';
+    for (var k = 0; k < buttons.length; k++) {
+      var b = shareActions.appendChild(el('button', 'btn-xs' + (buttons[k].solid ? ' btn-solid' : ''), buttons[k].label));
+      b.type = 'button';
+      b.addEventListener('click', buttons[k].onClick);
+    }
+    sharePanel.hidden = false;
+    if (focusFirst && shareActions.firstElementChild) shareActions.firstElementChild.focus();
+  }
+  function hideSharePanel() {
+    var hadFocus = sharePanel.contains(document.activeElement);
+    sharePanel.hidden = true;
+    if (hadFocus) btnShare.focus();
+  }
+  var dismiss = { label: 'Got it', onClick: function () { hideSharePanel(); } };
+
+  function seenPrivacyNote() {
+    try { return localStorage.getItem(SHARE_NOTE_KEY) === '1'; } catch (e) { return false; }
+  }
+
+  function shareLink() {
+    if (!lastOutput) return;
+    var settings = { indent: indentSel.value, sortKeys: sortBox.checked, mode: mode, view: outView };
+    btnShare.disabled = true;
+    T.encodeShare(input.value, settings).then(function (hash) {
+      btnShare.disabled = !lastOutput;
+      var link = shareBase() + '#' + hash, size = T.shareLinkCheck(link.length);
+      var chars = T.groupDigits(size.length) + ' characters';
+      if (size.tooBig) {
+        showSharePanel(['This JSON is too big to share by link (' + chars + '; the limit is ' + T.groupDigits(T.SHARE_MAX_LENGTH) +
+          '). Use Download and send the file instead.'],
+          [{ label: 'Download instead', solid: true, onClick: function () { hideSharePanel(); downloadOutput(); } }, dismiss]);
+        return;
+      }
+      var notes = [];
+      if (!seenPrivacyNote()) {
+        notes.push(PRIVACY_NOTE);
+        try { localStorage.setItem(SHARE_NOTE_KEY, '1'); } catch (e) {}
+      }
+      if (size.warn) {
+        notes.push('This link is ' + chars + ' long. Some chat apps and email clients cut long links off, so check that it ' +
+          'arrives complete, or use Download instead.');
+      }
+      var after = function () { if (notes.length) showSharePanel(notes, [dismiss]); else sharePanel.hidden = true; };
+      // On phones, the system share sheet; elsewhere (or if it fails), copy the link.
+      var phone = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+      if (phone && navigator.share) {
+        navigator.share({ title: 'JSON', url: link }).then(function () { showToast('Link shared (' + chars + ')'); after(); }, function (e) {
+          if (e && e.name === 'AbortError') return;
+          copyText(link, 'Link copied (' + chars + ')');
+          after();
+        });
+      } else {
+        copyText(link, 'Link copied (' + chars + ')');
+        after();
+      }
+    }, function () {
+      btnShare.disabled = !lastOutput;
+      showToast('Couldn\u2019t make a link in this browser');
+    });
+  }
+  btnShare.addEventListener('click', shareLink);
+
+  // Opening a link with shared JSON. Shared content is untrusted: it only ever goes into the
+  // input as text and through the same escaping as typed JSON; settings are whitelisted.
+  function applyShared(r) {
+    var s = r.settings;
+    if (s.indent) indentSel.value = s.indent;
+    if (typeof s.sortKeys === 'boolean') sortBox.checked = s.sortKeys;
+    if (s.view) setOutView(s.view, false);
+    treeResetNext = true;
+    loadedFileName = null;
+    inputDirty = false;
+    input.value = r.text;
+    sharedText = r.text;
+    setMode(s.mode || 'format');
+    showToast('Opened shared JSON');
+  }
+  function openShareHash() {
+    var hash = location.hash;
+    if (!/^#[ju]\d+=/.test(hash)) return;
+    T.decodeShare(hash).then(function (r) {
+      if (!r || hash !== location.hash) return;
+      if (!r.ok) {
+        var why = r.reason === 'version' ? 'This link was made by a newer version of JSON Prettify. Reload the page, or ask for a new link.' :
+          r.reason === 'unsupported' ? 'This browser can\u2019t open compressed links. Try a current version of Chrome, Edge, Firefox or Safari.' :
+          'This link seems to be incomplete, so it can\u2019t be opened. It may have been cut off when it was sent. Ask for the full link, or for the file.';
+        showSharePanel([why], [dismiss]);
+        return;
+      }
+      if (inputDirty && input.value !== r.text) {
+        showSharePanel(['This link has shared JSON in it. Opening it replaces the JSON in the input.'], [
+          { label: 'Open shared JSON', solid: true, onClick: function () { hideSharePanel(); applyShared(r); } },
+          { label: 'Keep my JSON', onClick: function () { hideSharePanel(); clearShareHash(); } }
+        ], true);
+        return;
+      }
+      sharePanel.hidden = true;
+      applyShared(r);
+    });
+  }
+  window.addEventListener('hashchange', openShareHash);
+
   // ---- Download ----
   // Saves the output as a .json file made in the browser (a Blob), so it works offline.
   var btnDownload = $('btnDownload');
@@ -1633,4 +1764,5 @@
 
   input.value = SAMPLE;
   update();
+  openShareHash();
 })();
