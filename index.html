@@ -125,6 +125,7 @@
               <option value="json" selected>JSON</option>
               <option value="yaml">YAML</option>
               <option value="csv">CSV</option>
+              <option value="ts">TypeScript</option>
             </select>
             <svg class="icon chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg>
           </span>
@@ -171,6 +172,23 @@
             <input type="checkbox" id="csvProtect" checked aria-describedby="csvProtectHelp"> Protect against spreadsheet formulas
           </label>
           <span class="sr-only" id="csvProtectHelp">Spreadsheet apps run cells that start with =, +, -, @, a tab or a carriage return as formulas, which can run commands or send data elsewhere when someone opens the file. A ' in front makes them show as plain text.</span>
+        </div>
+        <div class="format-bar" id="tsBar" role="group" aria-label="TypeScript options" hidden>
+          <label class="field field-sm" for="tsStyle">
+            <span class="field-label">Declare as</span>
+            <span class="select-wrap select-sm">
+              <select id="tsStyle">
+                <option value="interface" selected>Interfaces</option>
+                <option value="type">Type aliases</option>
+              </select>
+              <svg class="icon chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg>
+            </span>
+          </label>
+          <label class="field field-sm" for="tsRoot">
+            <span class="field-label">Root name</span>
+            <input id="tsRoot" class="text-input" type="text" value="Root" autocomplete="off" spellcheck="false" maxlength="60" aria-describedby="tsRootHelp">
+          </label>
+          <span class="sr-only" id="tsRootHelp">The name of the top-level type. Names that are not valid TypeScript are changed to PascalCase, or to Root.</span>
         </div>
         <div class="share-panel" id="sharePanel" role="region" aria-label="Share link" hidden>
           <div class="share-msg" id="shareMsg" role="status"></div>

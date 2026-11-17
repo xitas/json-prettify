@@ -1271,6 +1271,187 @@
     return tokens;
   }
 
+  // ---- TypeScript ----
+  // A type is inferred from the data and merged across array items. A type here is a union:
+  // { prims: ['string', 'number', 'boolean', 'null'] in first-seen order, obj, arr } where
+  // obj = { count, props: Map(key -> { t, count }) } and arr = { item }. A type with no
+  // members is an empty array's item and is written as unknown.
+  function tsEmpty() { return { prims: [], obj: null, arr: null }; }
+
+  function tsInfer(v) {
+    var t = tsEmpty();
+    if (v === null) t.prims.push('null');
+    else if (Array.isArray(v)) {
+      var item = tsEmpty();
+      for (var i = 0; i < v.length; i++) item = tsMerge(item, tsInfer(v[i]));
+      t.arr = { item: item };
+    } else if (typeof v === 'object') {
+      var props = new Map(), keys = Object.keys(v);
+      for (var k = 0; k < keys.length; k++) props.set(keys[k], { t: tsInfer(v[keys[k]]), count: 1 });
+      t.obj = { count: 1, props: props };
+    } else t.prims.push(typeof v);   // string, number or boolean
+    return t;
+  }
+
+  function tsMerge(a, b) {
+    var t = { prims: a.prims.slice(), obj: a.obj, arr: a.arr };
+    b.prims.forEach(function (p) { if (t.prims.indexOf(p) === -1) t.prims.push(p); });
+    if (b.arr) t.arr = a.arr ? { item: tsMerge(a.arr.item, b.arr.item) } : b.arr;
+    if (b.obj) {
+      if (!a.obj) t.obj = b.obj;
+      else {
+        var props = new Map();
+        a.obj.props.forEach(function (p, k) { props.set(k, p); });
+        b.obj.props.forEach(function (p, k) {
+          var q = props.get(k);
+          props.set(k, q ? { t: tsMerge(q.t, p.t), count: q.count + p.count } : p);
+        });
+        t.obj = { count: a.obj.count + b.obj.count, props: props };
+      }
+    }
+    return t;
+  }
+
+  // Names that would be confusing or break the output if a generated type took them.
+  var TS_RESERVED = ('break case catch class const continue debugger default delete do else enum export extends false finally for ' +
+    'function if import in instanceof new null return super switch this throw true try typeof var void while with implements ' +
+    'interface let package private protected public static yield any boolean number string symbol bigint unknown never object ' +
+    'undefined type as of declare namespace module async await keyof readonly infer is asserts unique global require ' +
+    'Array Object String Number Boolean Symbol BigInt Function Date Promise Map Set Error RegExp JSON Math Record Partial Required ' +
+    'Readonly Pick Omit').split(' ');
+
+  function tsIsIdentifier(s) { return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(s); }
+
+  // "user_profile", "user-profile", "userProfile" and "User profile" all become UserProfile.
+  function tsPascal(s) {
+    var words = String(s).replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(/[^A-Za-z0-9]+/).filter(Boolean);
+    var name = words.map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join('');
+    if (/^[0-9]/.test(name)) name = 'T' + name;
+    return name;
+  }
+
+  // users -> user, categories -> category, boxes -> box, people -> person. Words that
+  // already look singular (status, analysis, data) are left alone.
+  var TS_IRREGULAR = { people: 'person', children: 'child', men: 'man', women: 'woman', mice: 'mouse', geese: 'goose', teeth: 'tooth', feet: 'foot', criteria: 'criterion', indices: 'index', matrices: 'matrix', vertices: 'vertex' };
+  function tsSingular(word) {
+    var m = /^(.*?)([A-Za-z]+)$/.exec(word);
+    if (!m) return word;
+    var head = m[1], w = m[2], lower = w.toLowerCase(), out;
+    var fix = function (s) { return w.charAt(0) === w.charAt(0).toUpperCase() ? s.charAt(0).toUpperCase() + s.slice(1) : s; };
+    if (TS_IRREGULAR[lower]) out = fix(TS_IRREGULAR[lower]);
+    else if (/[^aeiou]ies$/i.test(w)) out = w.slice(0, -3) + 'y';
+    else if (/(?:ss|sh|ch|x|z)es$/i.test(w)) out = w.slice(0, -2);
+    else if (/(?:ss|us|is|ous)$/i.test(w) || !/s$/i.test(w) || w.length < 3) out = w;
+    else out = w.slice(0, -1);
+    return head + out;
+  }
+
+  function tsKey(k) { return tsIsIdentifier(k) ? k : JSON.stringify(k); }
+
+  // Structural signature, used to give identical shapes one shared name.
+  function tsSignature(t, memo) {
+    if (memo.has(t)) return memo.get(t);
+    var parts = t.prims.slice().sort();
+    if (t.arr) parts.push('[' + tsSignature(t.arr.item, memo) + ']');
+    if (t.obj) {
+      var o = t.obj, props = [];
+      o.props.forEach(function (p, k) { props.push(JSON.stringify(k) + (p.count < o.count ? '?' : '') + ':' + tsSignature(p.t, memo)); });
+      parts.push('{' + props.sort().join(',') + '}');   // key order does not change the shape
+    }
+    var sig = parts.join('|');
+    memo.set(t, sig);
+    return sig;
+  }
+
+  // toTypeScript(value, { rootName, style: 'interface' | 'type', indent })
+  //   -> { text } with export declarations, the root first, or { error } for data nested
+  //   too deeply to walk.
+  function toTypeScript(value, options) {
+    try { return tsDeclarations(value, options || {}); } catch (e) {
+      if (e instanceof RangeError) return { error: 'This JSON is nested too deeply to describe as TypeScript.' };
+      throw e;
+    }
+  }
+
+  function tsDeclarations(value, opts) {
+    var style = opts.style === 'type' ? 'type' : 'interface';
+    var unit = opts.indent === '\t' ? '\t' : new Array((Number(opts.indent) || 2) + 1).join(' ');
+    var raw = String(opts.rootName == null ? '' : opts.rootName).trim();
+    var rootName = tsIsIdentifier(raw) && TS_RESERVED.indexOf(raw) === -1 ? raw : tsPascal(raw);
+    if (!rootName || TS_RESERVED.indexOf(rootName) !== -1) rootName = 'Root';
+
+    var root = tsInfer(value);
+
+    var memo = new Map(), sigToName = new Map(), used = new Set([rootName]), queue = [];
+
+    function nameFor(obj, hint, parent) {
+      var holder = { prims: [], obj: obj, arr: null };
+      var sig = tsSignature(holder, memo);
+      if (sigToName.has(sig)) return sigToName.get(sig);
+      var base = tsPascal(hint) || 'Item';
+      var name = base;
+      if (used.has(name) || TS_RESERVED.indexOf(name) !== -1) name = parent + base;
+      for (var n = 2; used.has(name) || TS_RESERVED.indexOf(name) !== -1; n++) name = parent + base + n;
+      used.add(name);
+      sigToName.set(sig, name);
+      queue.push({ name: name, obj: obj });
+      return name;
+    }
+
+    // hint: the key the value sits under; parent: the type that holds it.
+    function expr(t, hint, parent) {
+      var parts = [];
+      if (t.obj) parts.push(t.obj.props.size ? nameFor(t.obj, hint, parent) : 'Record<string, unknown>');
+      if (t.arr) {
+        var item = t.arr.item;
+        var n = (item.obj ? 1 : 0) + (item.arr ? 1 : 0) + item.prims.length;
+        var singular = tsSingular(hint);
+        var inner = expr(item, singular === hint ? hint + 'Item' : singular, parent);
+        parts.push(n > 1 ? '(' + inner + ')[]' : inner + '[]');
+      }
+      t.prims.forEach(function (p) { if (p !== 'null') parts.push(p); });
+      if (t.prims.indexOf('null') !== -1) parts.push('null');
+      return parts.length ? parts.join(' | ') : 'unknown';
+    }
+
+    function body(obj, name) {
+      var lines = [];
+      obj.props.forEach(function (p, k) {
+        lines.push(unit + tsKey(k) + (p.count < obj.count ? '?' : '') + ': ' + expr(p.t, k, name) + ';');
+      });
+      return '{\n' + lines.join('\n') + '\n}';
+    }
+
+    var decls = [];
+    var rootIsObject = root.obj && root.obj.props.size && !root.arr && !root.prims.length;
+    if (rootIsObject) {
+      sigToName.set(tsSignature({ prims: [], obj: root.obj, arr: null }, memo), rootName);
+      queue.push({ name: rootName, obj: root.obj });
+    } else {
+      decls.push('export type ' + rootName + ' = ' + expr(root, rootName, rootName) + ';');
+    }
+    for (var q = 0; q < queue.length; q++) {
+      var d = queue[q], b = body(d.obj, d.name);
+      decls.push(style === 'type' ? 'export type ' + d.name + ' = ' + b + ';' : 'export interface ' + d.name + ' ' + b);
+    }
+    return { text: decls.join('\n\n') + '\n' };
+  }
+
+  // Highlighting for the TypeScript output: property names, keywords, type names, null.
+  function tsTokens(text) {
+    var tokens = [], re = /"(?:[^"\\\n]|\\.)*"(?=\??:)|[A-Za-z_$][A-Za-z0-9_$]*(?=\??:)|\b(?:export|interface|type)\b|\b(?:string|number|boolean|unknown|Record)\b|\bnull\b|[A-Z][A-Za-z0-9_$]*/g, m;
+    while ((m = re.exec(text))) {
+      var s = m[0];
+      var after = text.charAt(re.lastIndex);
+      var cls = after === ':' || (after === '?' && text.charAt(re.lastIndex + 1) === ':') ? 'k'
+        : s === 'export' || s === 'interface' || s === 'type' ? 'b'
+        : s === 'null' ? 'z'
+        : /^[a-z]/.test(s) || s === 'Record' ? 'n' : 's';
+      tokens.push({ start: m.index, end: re.lastIndex, cls: cls });
+    }
+    return tokens;
+  }
+
   // ---- Share links ----
   // The JSON travels inside the link's hash (#...), which browsers never send to a server.
   // Format: j1=<crc32>.<base64url of deflate-raw bytes>  or  u1=<crc32>.<base64url of the
@@ -1476,6 +1657,8 @@
     yamlTokens: yamlTokens,
     toCsv: toCsv,
     csvTokens: csvTokens,
+    toTypeScript: toTypeScript,
+    tsTokens: tsTokens,
     downloadName: downloadName,
     crc32: crc32,
     base64urlEncode: base64urlEncode,

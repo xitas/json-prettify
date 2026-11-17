@@ -33,7 +33,7 @@ test('exports every helper', () => {
     'formatPath', 'pathLabels', 'valueAtPath', 'copyValueText', 'pathAtOffset', 'rangeOfPath', 'downloadName',
     'createSearch', 'searchJson', 'jsonStringOffset', 'locateMatches', 'highlightMarked',
     'crc32', 'base64urlEncode', 'base64urlDecode', 'canCompress', 'encodeShare', 'decodeShare', 'parseShareSettings', 'shareLinkCheck',
-    'renderTokens', 'searchText', 'yamlPlain', 'toYaml', 'yamlTokens', 'toCsv', 'csvTokens']) {
+    'renderTokens', 'searchText', 'yamlPlain', 'toYaml', 'yamlTokens', 'toCsv', 'csvTokens', 'toTypeScript', 'tsTokens']) {
     assert.equal(typeof T[name], 'function', name);
   }
 });
@@ -1092,6 +1092,161 @@ describe('csvTokens', () => {
     assert.deepEqual(T.csvTokens(text).map(t => t.cls + ':' + text.slice(t.start, t.end)), ['k:name', 'k:n', 'k:ok', 'k:z', 's:"A,B"', 'n:1.5', 'b:true']);
     const semi = T.toCsv([{ a: 'x' }], { delimiter: ';' }).text;
     assert.deepEqual(T.csvTokens(semi, ';').map(t => t.cls), ['k', 's']);
+  });
+});
+
+// ---------- TypeScript ----------
+
+describe('toTypeScript', () => {
+  const ts = require('typescript');
+  const OPTIONS = { strict: true, noEmit: true, target: ts.ScriptTarget.ES2020, lib: ['lib.es2020.d.ts'], types: [], skipLibCheck: true };
+  const libFiles = new Map();   // parsed once, shared by every compile
+
+  // Type-checks one file with the real compiler and returns its error messages.
+  function compile(code) {
+    const host = ts.createCompilerHost(OPTIONS);
+    const readLib = host.getSourceFile.bind(host);
+    host.getSourceFile = (name, ...rest) => {
+      if (name.endsWith('check.ts')) return ts.createSourceFile(name, code, ts.ScriptTarget.ES2020, true);
+      if (!libFiles.has(name)) libFiles.set(name, readLib(name, ...rest));
+      return libFiles.get(name);
+    };
+    const program = ts.createProgram(['check.ts'], OPTIONS, host);
+    return ts.getPreEmitDiagnostics(program).map(d => ts.flattenDiagnosticMessageText(d.messageText, '\n'));
+  }
+  const rootOf = text => /export (?:interface|type) ([A-Za-z_$][\w$]*)/.exec(text)[1];
+  // The output compiles, and the data it was made from is assignable to the root type.
+  const withData = (text, value) => text + `\nexport const value: ${rootOf(text)} = ${JSON.stringify(value)};\n`;
+  function checkTypes(value, opts) {
+    const out = T.toTypeScript(value, opts);
+    assert.ok(out.text, out.error);
+    assert.deepEqual(compile(withData(out.text, value)), [], out.text);
+    return out.text;
+  }
+
+  test('the checker itself catches data that does not fit', () => {
+    const text = T.toTypeScript({ id: 1 }).text;
+    assert.notDeepEqual(compile(withData(text, { id: 'one' })), []);
+    assert.notDeepEqual(compile(withData(text, {})), []);
+  });
+
+  test('a plain object becomes an interface named Root', () => {
+    assert.equal(checkTypes({ id: 1, name: 'A', ok: true, none: null }),
+      'export interface Root {\n  id: number;\n  name: string;\n  ok: boolean;\n  none: null;\n}\n');
+  });
+
+  test('array items merge: missing properties are optional, mixed values are unions, null adds | null', () => {
+    const text = checkTypes({ users: [{ id: 1, name: 'A', age: 30 }, { id: 2, name: null, email: 'b@x' }, { id: '3', name: 'C' }] });
+    assert.equal(text, 'export interface Root {\n  users: User[];\n}\n\n' +
+      'export interface User {\n  id: number | string;\n  name: string | null;\n  age?: number;\n  email?: string;\n}\n');
+  });
+
+  test('empty arrays are unknown[], mixed arrays are (A | B)[], nested arrays keep their depth', () => {
+    const text = checkTypes({ empty: [], mixed: [1, 'a', null], grid: [[1, 2], [3]], things: [{ a: 1 }, 'x'], later: [[], [true]] });
+    assert.match(text, /^  empty: unknown\[\];$/m);
+    assert.match(text, /^  mixed: \(number \| string \| null\)\[\];$/m);
+    assert.match(text, /^  grid: number\[\]\[\];$/m);
+    assert.match(text, /^  things: \(Thing \| string\)\[\];$/m);
+    assert.match(text, /^  later: boolean\[\]\[\];$/m);
+  });
+
+  test('a property that is sometimes an object and sometimes null', () => {
+    const text = checkTypes({ rows: [{ owner: { id: 1 } }, { owner: null }, {}] });
+    assert.match(text, /^  owner\?: Owner \| null;$/m);
+  });
+
+  test('nested types are named in PascalCase, with singular names for array items', () => {
+    const text = checkTypes({ user_profile: { a: 1 }, 'shipping-info': { b: 1 }, lineItems: [{ c: 1 }], categories: [{ d: 1 }],
+      boxes: [{ e: 1 }], people: [{ f: 1 }], addresses: [{ g: 1 }], status: [{ h: 1 }], data: [{ i: 1 }] });
+    for (const name of ['UserProfile', 'ShippingInfo', 'LineItem', 'Category', 'Box', 'Person', 'Address', 'StatusItem', 'DataItem']) {
+      assert.match(text, new RegExp(`^export interface ${name} \\{$`, 'm'), name);
+    }
+  });
+
+  test('identical shapes share one type', () => {
+    const text = checkTypes({ billing: { street: 'a', zip: '1' }, shipping: { zip: '2', street: 'b' }, users: [{ home: { street: 'c', zip: '3' } }] });
+    assert.equal((text.match(/^export interface/gm) || []).length, 3, text);   // Root, Billing, User
+    assert.match(text, /^  shipping: Billing;$/m);
+    assert.match(text, /^  home: Billing;$/m);
+  });
+
+  test('different shapes with the same name do not clash', () => {
+    const text = checkTypes({ user: { id: 1 }, team: { user: { name: 'x' } }, group: { user: { role: 'y' } }, root: { z: 1 }, record: { r: 1 }, string: { s: 1 } });
+    assert.match(text, /^  user: User;$/m);
+    assert.match(text, /^  user: TeamUser;$/m);
+    assert.match(text, /^  user: GroupUser;$/m);
+    assert.match(text, /^  root: RootRoot;$/m);
+    assert.match(text, /^  record: RootRecord;$/m);    // Record is a built-in type
+    assert.match(text, /^  string: RootString;$/m);
+    const names = text.match(/^export interface (\w+)/gm);
+    assert.equal(new Set(names).size, names.length);
+  });
+
+  test('property names that are not identifiers are quoted', () => {
+    const text = checkTypes({ 'odd key': 1, '2fa': true, 'a-b': 'x', '': null, 'été': 1, 'say "hi"': 1, class: 1, $ok: 1, _x: 1 });
+    assert.equal(text, 'export interface Root {\n  "odd key": number;\n  "2fa": boolean;\n  "a-b": string;\n  "": null;\n  "été": number;\n' +
+      '  "say \\"hi\\"": number;\n  class: number;\n  $ok: number;\n  _x: number;\n}\n');
+  });
+
+  test('type aliases, the root name and the indent setting', () => {
+    const text = checkTypes({ a: { b: 1 } }, { style: 'type', rootName: 'Config', indent: 4 });
+    assert.equal(text, 'export type Config = {\n    a: A;\n};\n\nexport type A = {\n    b: number;\n};\n');
+    assert.match(checkTypes({ a: 1 }, { indent: '\t' }), /^\ta: number;$/m);
+    assert.equal(rootOf(T.toTypeScript({ a: 1 }, { rootName: 'api response' }).text), 'ApiResponse');
+    assert.equal(rootOf(T.toTypeScript({ a: 1 }, { rootName: 'myData' }).text), 'myData');
+    assert.equal(rootOf(T.toTypeScript({ a: 1 }, { rootName: 'interface' }).text), 'Interface');   // a keyword is PascalCased
+    for (const bad of ['', '   ', 'string', 'Record', '!!!']) assert.equal(rootOf(T.toTypeScript({ a: 1 }, { rootName: bad }).text), 'Root', bad);
+    assert.equal(rootOf(T.toTypeScript({ a: 1 }, { rootName: '123' }).text), 'T123');
+  });
+
+  test('roots that are not objects', () => {
+    assert.equal(checkTypes([{ a: 1 }, { a: 2, b: 's' }]), 'export type Root = RootItem[];\n\nexport interface RootItem {\n  a: number;\n  b?: string;\n}\n');
+    assert.equal(checkTypes([{ a: 1 }], { rootName: 'Users' }).split('\n')[0], 'export type Users = User[];');
+    assert.equal(checkTypes('x'), 'export type Root = string;\n');
+    assert.equal(checkTypes(null), 'export type Root = null;\n');
+    assert.equal(checkTypes([]), 'export type Root = unknown[];\n');
+    assert.equal(checkTypes({}), 'export type Root = Record<string, unknown>;\n');
+    assert.equal(checkTypes([1, 'a']), 'export type Root = (number | string)[];\n');
+  });
+
+  test('very deep data gives a message instead of a crash', () => {
+    for (const depth of [3000, 6000, 20000]) {
+      const r = T.toTypeScript(JSON.parse('['.repeat(depth) + ']'.repeat(depth)));
+      assert.ok(r.text || /nested too deeply/.test(r.error), String(depth));
+    }
+  });
+
+  test('fuzz: random data always gives types that compile and accept the data', () => {
+    let seed = 7;
+    const rand = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    const pick = list => list[Math.floor(rand() * list.length)];
+    const KEYS = ['id', 'name', 'user', 'users', 'items', 'data', 'odd key', '2fa', 'a-b', '', 'class', 'status', 'root', 'record',
+      'string', 'Item', 'children', 'x.y', 'emoji \u{1F600}', 'tags'];
+    function value(depth) {
+      const r = rand();
+      if (depth > 3 || r < 0.35) return pick([0, -1.5, 1e21, 'text', '', true, false, null]);
+      if (r < 0.65) return Array.from({ length: Math.floor(rand() * 4) }, () => value(depth + 1));
+      const o = {};
+      for (let i = Math.floor(rand() * 5); i > 0; i--) o[pick(KEYS)] = value(depth + 1);
+      return o;
+    }
+    // Rows that share some keys exercise merging, optional properties and unions.
+    function rows(depth) { return Array.from({ length: 1 + Math.floor(rand() * 4) }, () => value(depth)); }
+    let code = '';
+    for (let i = 0; i < 150; i++) {
+      const v = i % 3 === 0 ? rows(1) : i % 3 === 1 ? { list: rows(1), other: value(1) } : value(0);
+      const out = T.toTypeScript(v, { style: i % 2 ? 'type' : 'interface', rootName: pick(['Root', 'Data', 'item', '']) });
+      code += `namespace N${i} {\n${withData(out.text, v)}}\n`;
+    }
+    assert.deepEqual(compile(code), []);
+  });
+});
+
+describe('tsTokens', () => {
+  test('keywords, property names, type names and null', () => {
+    const text = 'export interface Root {\n  "odd key"?: string | null;\n  users: User[];\n  meta: Record<string, unknown>;\n}\n';
+    assert.deepEqual(T.tsTokens(text).map(t => t.cls + ':' + text.slice(t.start, t.end)),
+      ['b:export', 'b:interface', 's:Root', 'k:"odd key"', 'n:string', 'z:null', 'k:users', 's:User', 'k:meta', 'n:Record', 'n:string', 'n:unknown']);
   });
 });
 

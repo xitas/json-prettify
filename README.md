@@ -18,6 +18,7 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 - **Share** a link with the JSON (and your view settings) stored inside the link itself, compressed in the part after `#`, which browsers never send to a server. Nothing is uploaded; anyone with the link can see the JSON
 - **Output as JSON or YAML**, with YAML that quotes anything a YAML parser could misread
 - **Output as CSV** for an array of objects: one row per object, nested objects as `dotted.columns`, a comma, semicolon or tab delimiter, and protection against spreadsheet formula injection (on by default). Downloads include a UTF-8 byte order mark so Excel shows accents correctly
+- **Output as TypeScript**: interfaces or type aliases inferred from the data, with an editable root name. Nested types get PascalCase names (`users` → `User`), identical shapes share one type, and array items are merged so missing properties become optional and mixed values become unions
 - **Search** the output in both views: keys, values or both, match case, whole word and regex, with next/previous, a match count and a Filter that shows only matching branches of the tree
 - **Syntax highlighting** for keys, strings, numbers, booleans and null
 - **Copy** the result, **download** it as a `.json` file (a loaded `data.json` saves as `data.formatted.json` or `data.min.json`), or use it as the new input

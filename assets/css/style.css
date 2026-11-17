@@ -1149,6 +1149,24 @@ button.tree-copy .icon {
   width: 16px;
   height: 16px;
 }
+.text-input {
+  width: 128px;
+  height: 28px;
+  padding: 0 var(--space-3);
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+}
+.text-input:hover {
+  border-color: var(--fg);
+}
+.text-input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
 
 /* ---------- Share panel (privacy note, size warnings, opening links) ---------- */
 .share-panel {

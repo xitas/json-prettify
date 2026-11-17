@@ -91,6 +91,20 @@
     convert: function (v) { return T.toCsv(v, csvOpts); },
     tokens: function (text) { return T.csvTokens(text, csvOpts.delimiter); }
   };
+  var TS_KEY = 'json-formatter-ts', tsOpts = { style: 'interface', rootName: 'Root' };
+  try {
+    var savedTs = JSON.parse(localStorage.getItem(TS_KEY) || 'null');
+    if (savedTs && typeof savedTs === 'object') {
+      if (savedTs.style === 'type') tsOpts.style = 'type';
+      if (typeof savedTs.rootName === 'string') tsOpts.rootName = savedTs.rootName.slice(0, 60);
+    }
+  } catch (e) {}
+  FORMATS.ts = {
+    // Plain text: some systems treat .ts as an MPEG video file.
+    label: 'TypeScript', mime: 'text/plain;charset=utf-8',
+    convert: function (v, indent) { return T.toTypeScript(v, { style: tsOpts.style, rootName: tsOpts.rootName, indent: indent }); },
+    tokens: T.tsTokens
+  };
   var outFormat = 'json';
   var FORMAT_KEY = 'json-formatter-format', outFormatSel = $('outFormat');
   try {
@@ -1803,7 +1817,20 @@
   }
   csvDelimiter.addEventListener('change', saveCsvOptions);
   csvProtect.addEventListener('change', saveCsvOptions);
-  function syncFormatBars() { csvBar.hidden = outFormat !== 'csv'; }
+  var tsBar = $('tsBar'), tsStyle = $('tsStyle'), tsRoot = $('tsRoot'), tsTimer = 0;
+  tsStyle.value = tsOpts.style;
+  tsRoot.value = tsOpts.rootName;
+  function saveTsOptions() {
+    clearTimeout(tsTimer);
+    tsOpts.style = tsStyle.value === 'type' ? 'type' : 'interface';
+    tsOpts.rootName = tsRoot.value;
+    try { localStorage.setItem(TS_KEY, JSON.stringify(tsOpts)); } catch (e) {}
+    update();
+  }
+  tsStyle.addEventListener('change', saveTsOptions);
+  tsRoot.addEventListener('input', function () { clearTimeout(tsTimer); tsTimer = setTimeout(saveTsOptions, 200); });
+  tsRoot.addEventListener('change', saveTsOptions);
+  function syncFormatBars() { csvBar.hidden = outFormat !== 'csv'; tsBar.hidden = outFormat !== 'ts'; }
   syncFormatBars();
 
   outFormatSel.addEventListener('change', function () {
