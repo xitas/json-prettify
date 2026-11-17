@@ -1014,6 +1014,78 @@ button.tree-copy .icon {
 
 .pane {
   position: relative;
+  container: pane / inline-size;
+}
+
+/* ---------- Output header: one row, with a More menu ---------- */
+.out-head .actions {
+  flex-wrap: nowrap;
+}
+.more-wrap {
+  position: relative;
+}
+.more-menu {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 20;
+  min-width: 220px;
+  padding: var(--space-1);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--card-shadow);
+}
+.more-menu:focus {
+  outline: none;
+}
+.more-menu [role="menuitem"] {
+  width: 100%;
+  height: 34px;
+  justify-content: flex-start;
+  padding: 0 var(--space-3);
+  border-color: transparent;
+  border-radius: 6px;
+  background: transparent;
+  font-size: var(--text-sm);
+}
+.more-menu [role="menuitem"]:hover,
+.more-menu [role="menuitem"]:focus-visible {
+  background: var(--surface-2);
+  border-color: transparent;
+}
+.more-menu [role="menuitem"]:focus-visible {
+  outline-offset: -2px;
+}
+.more-menu [role="menuitem"]:disabled {
+  background: transparent;
+}
+.menu-hint {
+  margin-left: auto;
+  padding-left: var(--space-4);
+  font-size: 12px;
+  color: var(--muted);
+}
+.menu-sep {
+  height: 1px;
+  margin: var(--space-1) var(--space-2);
+  background: var(--line);
+}
+/* In a narrow pane, Copy and Download show only their icons (the text stays for screen
+   readers). */
+@container pane (max-width: 540px) {
+  .btn-collapse {
+    width: var(--control-h-sm);
+    padding: 0;
+  }
+  .btn-collapse .btn-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
 }
 .copy-toast {
   position: absolute;
@@ -1390,8 +1462,7 @@ pre code.hl {
 }
 
 @media (max-width: 400px) {
-  .group-files .icon,
-  .pane-head .actions .icon {
+  .group-files .icon {
     display: none;
   }
 }

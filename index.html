@@ -117,33 +117,33 @@
         </div>
       </section>
       <section class="pane" aria-label="Result">
-        <div class="pane-head">
+        <div class="pane-head out-head">
           <span class="title" id="outTitle">Formatted</span>
           <span id="outMeta" class="badges"></span>
-          <button id="btnSearch" class="btn-sm btn-icon" type="button" aria-label="Search" aria-expanded="false" aria-controls="searchBar" title="Search (Ctrl/Cmd + F or /)">
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
-          </button>
-          <div class="segmented segmented-sm" role="group" aria-label="Output view">
-            <button id="btnViewCode" class="active" type="button" aria-pressed="true">Code</button>
-            <button id="btnViewTree" type="button" aria-pressed="false">Tree</button>
-          </div>
           <div class="actions">
-            <button id="btnCopy" class="btn-sm" type="button">
+            <button id="btnSearch" class="btn-sm btn-icon" type="button" aria-label="Search" aria-expanded="false" aria-controls="searchBar" title="Search (Ctrl/Cmd + F or /)">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+            </button>
+            <button id="btnCopy" class="btn-sm btn-collapse" type="button" title="Copy the output">
               <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
-              <span class="label">Copy</span>
+              <span class="btn-text">Copy</span>
             </button>
-            <button id="btnDownload" class="btn-sm" type="button" title="Save as a .json file (Ctrl/Cmd + S)">
+            <button id="btnDownload" class="btn-sm btn-collapse" type="button" title="Save as a file (Ctrl/Cmd + S)">
               <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
-              <span>Download</span>
+              <span class="btn-text">Download</span>
             </button>
-            <button id="btnShare" class="btn-sm" type="button" title="Copy a link with this JSON inside it (nothing is uploaded)">
-              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/></svg>
-              <span>Share</span>
-            </button>
-            <button id="btnUse" class="btn-sm" type="button" title="Replace the input with this result">
-              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
-              <span>Use as input</span>
-            </button>
+            <div class="more-wrap">
+              <button id="btnMore" class="btn-sm btn-icon" type="button" aria-label="More actions" title="More actions" aria-haspopup="menu" aria-expanded="false" aria-controls="moreMenu">
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h.01M12 12h.01M19 12h.01" stroke-width="3"/></svg>
+              </button>
+              <div class="more-menu" id="moreMenu" role="menu" aria-label="More actions" tabindex="-1" hidden>
+                <button id="btnCopyPath" role="menuitem" tabindex="-1" type="button"><span>Copy path</span><span class="menu-hint" aria-hidden="true">C</span></button>
+                <button id="btnCopyValue" role="menuitem" tabindex="-1" type="button"><span>Copy value</span><span class="menu-hint" aria-hidden="true">Shift+C</span></button>
+                <div class="menu-sep" role="separator"></div>
+                <button id="btnShare" role="menuitem" tabindex="-1" type="button" title="Copy a link with this JSON inside it (nothing is uploaded)"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/></svg><span>Share link</span></button>
+                <button id="btnUse" role="menuitem" tabindex="-1" type="button" title="Replace the input with this result"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 12H5M11 6l-6 6 6 6"/></svg><span>Use as input</span></button>
+              </div>
+            </div>
           </div>
         </div>
         <div class="share-panel" id="sharePanel" role="region" aria-label="Share link" hidden>
@@ -179,6 +179,10 @@
           <p class="search-note" id="searchNote" hidden></p>
         </div>
         <div class="path-bar" id="pathBar" hidden>
+          <div class="segmented segmented-xs" role="group" aria-label="Output view">
+            <button id="btnViewCode" class="active" type="button" aria-pressed="true">Code</button>
+            <button id="btnViewTree" type="button" aria-pressed="false">Tree</button>
+          </div>
           <nav class="crumbs" id="crumbs" aria-label="Path of the selected value"></nav>
           <div class="path-tools">
             <label class="sr-only" for="pathFormat">Path format</label>
@@ -191,8 +195,6 @@
               </select>
               <svg class="icon chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg>
             </span>
-            <button id="btnCopyPath" class="btn-xs" type="button">Copy path</button>
-            <button id="btnCopyValue" class="btn-xs" type="button">Copy value</button>
           </div>
         </div>
         <div class="pane-body">

@@ -15,7 +15,6 @@
   var outEmpty = $('outEmpty'), outEmptyTitle = $('outEmptyTitle'), outEmptyText = $('outEmptyText');
   var statusEl = $('status'), indentSel = $('indent'), sortBox = $('sortKeys');
   var btnFormat = $('btnFormat'), btnMinify = $('btnMinify'), btnCopy = $('btnCopy'), btnUse = $('btnUse');
-  var copyLabel = btnCopy.querySelector('.label');
   var inGutter = $('inGutter'), inTrack = $('inGutterTrack'), inMark = $('inGutterMark');
   var outGutter = $('outGutter'), outTrack = $('outGutterTrack');
 
@@ -62,6 +61,7 @@
     outMeta.innerHTML = '';
     btnCopy.disabled = true;
     btnUse.disabled = true;
+    btnCopyPath.disabled = btnCopyValue.disabled = true;
     btnDownload.disabled = true;
     btnShare.disabled = true;
     if (searchOpen) {
@@ -205,6 +205,7 @@
         outMeta.innerHTML = badges(formatted.meta);
         btnCopy.disabled = false;
         btnUse.disabled = false;
+        btnCopyPath.disabled = btnCopyValue.disabled = false;
         btnDownload.disabled = false;
         btnShare.disabled = false;
 
@@ -362,24 +363,9 @@
     update();
   });
 
-  var copyTimer = null;
-  function flashCopy(text, ms) {
-    copyLabel.textContent = text;
-    clearTimeout(copyTimer);
-    copyTimer = setTimeout(function () { copyLabel.textContent = 'Copy'; }, ms);
-  }
+  // "Copied" shows as a message like the other copy actions (the button may be icon-only).
   btnCopy.addEventListener('click', function () {
-    if (!lastOutput) return;
-    var fallback = function () {
-      var r = document.createRange();
-      r.selectNodeContents(outCode);
-      var sel = window.getSelection();
-      sel.removeAllRanges(); sel.addRange(r);
-      flashCopy('Press Ctrl/Cmd + C', 2500);
-    };
-    try {
-      navigator.clipboard.writeText(lastOutput).then(function () { flashCopy('Copied', 1500); }, fallback);
-    } catch (e) { fallback(); }
+    if (lastOutput) copyText(lastOutput, 'Copied');
   });
 
   $('fileIn').addEventListener('change', function (e) {
@@ -1552,6 +1538,58 @@
   });
   syncSearchOptions();
 
+  // ---- More menu (WAI-ARIA menu button) ----
+  var btnMore = $('btnMore'), moreMenu = $('moreMenu');
+  var btnCopyPath = $('btnCopyPath'), btnCopyValue = $('btnCopyValue');
+  function menuItems() {
+    return [].slice.call(moreMenu.querySelectorAll('[role="menuitem"]')).filter(function (b) { return !b.disabled; });
+  }
+  function openMenu(focusLast) {
+    moreMenu.hidden = false;
+    btnMore.setAttribute('aria-expanded', 'true');
+    var items = menuItems();
+    (items.length ? items[focusLast ? items.length - 1 : 0] : moreMenu).focus();
+  }
+  function closeMenu(returnFocus) {
+    if (moreMenu.hidden) return;
+    moreMenu.hidden = true;
+    btnMore.setAttribute('aria-expanded', 'false');
+    if (returnFocus) btnMore.focus();
+  }
+  btnMore.addEventListener('click', function () {
+    if (moreMenu.hidden) openMenu(false); else closeMenu(true);
+  });
+  btnMore.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); openMenu(e.key === 'ArrowUp'); }
+  });
+  moreMenu.addEventListener('keydown', function (e) {
+    var items = menuItems(), i = items.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (items.length) items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus();
+    } else if (e.key === 'Home' || e.key === 'End') {
+      e.preventDefault();
+      if (items.length) items[e.key === 'Home' ? 0 : items.length - 1].focus();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeMenu(true);
+    } else if (e.key === 'Tab') {
+      closeMenu(false);
+    }
+  });
+  // Choosing an item closes the menu and returns focus to the More button first, so actions
+  // that move focus themselves (the share panel) still can.
+  moreMenu.addEventListener('click', function (e) {
+    if (e.target.closest('[role="menuitem"]')) closeMenu(true);
+  }, true);
+  document.addEventListener('pointerdown', function (e) {
+    if (!moreMenu.hidden && !moreMenu.contains(e.target) && !btnMore.contains(e.target)) closeMenu(false);
+  });
+  moreMenu.addEventListener('focusout', function (e) {
+    if (!moreMenu.hidden && e.relatedTarget && !moreMenu.contains(e.relatedTarget) && e.relatedTarget !== btnMore) closeMenu(false);
+  });
+
   // ---- Share link ----
   // The input text (and the current settings) go into the link's hash, compressed. Browsers
   // never send the hash to a server, so nothing is uploaded.
@@ -1587,7 +1625,7 @@
   function hideSharePanel() {
     var hadFocus = sharePanel.contains(document.activeElement);
     sharePanel.hidden = true;
-    if (hadFocus) btnShare.focus();
+    if (hadFocus) btnMore.focus();
   }
   var dismiss = { label: 'Got it', onClick: function () { hideSharePanel(); } };
 
