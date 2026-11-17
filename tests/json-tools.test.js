@@ -32,7 +32,8 @@ test('exports every helper', () => {
     'groupDigits', 'containerInfo', 'listChildren', 'childPath', 'displayKey', 'scalarView',
     'formatPath', 'pathLabels', 'valueAtPath', 'copyValueText', 'pathAtOffset', 'rangeOfPath', 'downloadName',
     'createSearch', 'searchJson', 'jsonStringOffset', 'locateMatches', 'highlightMarked',
-    'crc32', 'base64urlEncode', 'base64urlDecode', 'canCompress', 'encodeShare', 'decodeShare', 'parseShareSettings', 'shareLinkCheck']) {
+    'crc32', 'base64urlEncode', 'base64urlDecode', 'canCompress', 'encodeShare', 'decodeShare', 'parseShareSettings', 'shareLinkCheck',
+    'renderTokens', 'searchText', 'yamlPlain', 'toYaml', 'yamlTokens']) {
     assert.equal(typeof T[name], 'function', name);
   }
 });
@@ -809,6 +810,166 @@ describe('jsonStringOffset, locateMatches and highlightMarked', () => {
   });
 });
 
+// ---------- YAML ----------
+
+describe('toYaml', () => {
+  const YAML = require('yaml');
+  const back = (text, version = '1.2') => YAML.parse(text, { version, uniqueKeys: true, maxAliasCount: -1 });
+  const roundTrip = (value, indent = 2) => assert.deepEqual(back(T.toYaml(value, indent)), value, T.toYaml(value, indent));
+
+  test('a readable document', () => {
+    assert.equal(T.toYaml({ name: 'Widget', price: 9.5, tags: ['a', 'b'], owner: null, ok: true, dims: { w: 2, h: 3 } }),
+      'name: Widget\nprice: 9.5\ntags:\n  - a\n  - b\nowner: null\nok: true\ndims:\n  w: 2\n  h: 3\n');
+  });
+
+  test('follows the indent setting (Tab uses 4 spaces; YAML does not allow tabs)', () => {
+    const v = { a: { b: [1, { c: 2 }] } };
+    assert.equal(T.toYaml(v, 4), 'a:\n    b:\n        - 1\n        - c: 2\n');
+    assert.equal(T.toYaml(v, '\t'), T.toYaml(v, 4));
+    for (const indent of [2, 4, '\t']) roundTrip(v, indent);
+  });
+
+  test('empty objects and arrays are {} and []', () => {
+    assert.equal(T.toYaml({ a: {}, b: [], c: [{}, []] }), 'a: {}\nb: []\nc:\n  - {}\n  - []\n');
+    assert.equal(T.toYaml({}), '{}\n');
+    assert.equal(T.toYaml([]), '[]\n');
+    roundTrip({ a: {}, b: [], c: [{}, []] });
+  });
+
+  test('strings YAML would read as something else are quoted', () => {
+    const risky = ['yes', 'no', 'on', 'off', 'Yes', 'NO', 'y', 'n', 'true', 'False', 'null', '~', 'Null', '0123', '1e3', '0x1F', '0o17',
+      '0b101', '.5', '+1', '-2', '1_000', '1:30', '2026-11-17', '2001-12-14t21:59:43.10-05:00', '.inf', '-.Inf', '.NaN', 'a: b', 'a:b',
+      'x #y', '#c', '- item', '? q', ': c', '[x]', ']', '{x}', '}', ',x', '!tag', '&anchor', '*alias', '|block', '>fold', "'q", '"q',
+      '%dir', '@at', '`tick', ' lead', 'trail ', '', '\t', '<<', '=', '.', '..', '+.', '-.5e+3', '._', '._5', 'e00', 'E5', '+e3'];
+    for (const s of risky) {
+      const y = T.toYaml({ v: s });
+      assert.ok(/^v: "/.test(y), `${JSON.stringify(s)} -> ${y}`);
+      assert.equal(back(y).v, s, y);
+      assert.equal(back(y, '1.1').v, s, `YAML 1.1: ${y}`);
+    }
+  });
+
+  test('the same rules apply to keys', () => {
+    const doc = Object.fromEntries(['yes', 'null', '0123', 'a: b', '#k', '- k', '', ' k', 'true', '1e3'].map((k, i) => [k, i]));
+    const y = T.toYaml(doc);
+    assert.equal(y.split('\n').filter(l => l.startsWith('"')).length, 10, y);
+    assert.deepEqual(back(y), doc);
+    assert.deepEqual(back(y, '1.1'), doc);
+  });
+
+  test('safe strings stay plain', () => {
+    for (const s of ['Widget', 'hello world', 'caf\u00e9', 'a-b_c', 'x1', 'https://example.com', 'Amina Rauf', String.fromCodePoint(0x1f600) + ' ok']) {
+      const y = T.toYaml({ v: s });
+      if (s.includes(':')) assert.match(y, /^v: "/); else assert.equal(y, 'v: ' + s + '\n');
+    }
+  });
+
+  test('multi-line strings use block scalars with exact trailing newlines', () => {
+    assert.equal(T.toYaml({ t: 'a\nb' }), 't: |-\n  a\n  b\n');
+    assert.equal(T.toYaml({ t: 'a\nb\n' }), 't: |\n  a\n  b\n');
+    assert.equal(T.toYaml({ t: 'a\nb\n\n\n' }), 't: |+\n  a\n  b\n\n\n');
+    assert.equal(T.toYaml({ t: '  indented\nnext' }), 't: |2-\n    indented\n  next\n');
+    for (const t of ['a\nb', 'a\nb\n', 'a\nb\n\n\n', '\nleading', '  indented\nnext', 'a\n\n\nb', 'x\n   \ny', 'tab\there\nok',
+      '# not a comment\n- not a list\nkey: not a key', '---\n...\n', 'a\n  b\n    c\n']) {
+      roundTrip({ t }); roundTrip([t]); roundTrip({ l: [t, { t }] }); roundTrip(t);
+    }
+  });
+
+  test('multi-line strings with characters a block cannot hold are double-quoted', () => {
+    for (const t of ['a\r\nb', 'a\n\u0007', '\n\n', 'a\u2028b\nc']) {
+      assert.match(T.toYaml({ t }), /^t: "/);
+      roundTrip({ t });
+    }
+  });
+
+  test('numbers, booleans, null and nested arrays', () => {
+    roundTrip({ n: [0, -1, 1.5, -0.25, 1e21, 1.5e-7, 12345678901234567000, 2 ** 53], b: [true, false], z: null, m: [[1, [2, [3, []]]], [{}]] });
+    roundTrip([1, 'two', [3], { four: 4 }, null]);
+    roundTrip('just a string'); roundTrip(42); roundTrip(null); roundTrip(true);
+  });
+
+  test('every value of a document of tricky keys round-trips', () => {
+    roundTrip(trickyDoc());
+    roundTrip(trickyDoc(), 4);
+  });
+
+  test('very long keys use the explicit key form', () => {
+    const k = 'k'.repeat(1500);
+    assert.match(T.toYaml({ [k]: 1 }), /^\? /);
+    roundTrip({ [k]: 1, [k + '2']: { a: [1] }, short: 2 });
+  });
+
+  test('fuzz: strings built from YAML\'s most troublesome characters', () => {
+    let seed = 99;
+    const rand = n => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return (seed >>> 8) % n; };
+    const parts = [':', '#', '-', '?', '[', ']', '{', '}', ',', '&', '*', '!', '|', '>', "'", '"', '%', '@', '`', ' ', '  ', '\t', '\n', '\n\n',
+      '\r', '\\', '0', '1', '.', 'e', 'x', '+', '_', 'yes', 'no', 'null', 'true', '~', '---', '...', '<<', '=', 'a', 'Z', '\u00e9',
+      String.fromCodePoint(0x1f600), '\u2028', '\ufeff', '\u0085', '\u0000', '\u007f', '\u00a0', '0x', '1e', '2026-', ': ', ' #'];
+    const str = () => Array.from({ length: rand(6) }, () => parts[rand(parts.length)]).join('');
+    const make = d => {
+      const r = rand(d > 2 ? 3 : 5);
+      if (r === 0) return str();
+      if (r === 1) return [null, true, false, 0, -3.5, 1e21, 7][rand(7)];
+      if (r === 2) return str();
+      if (r === 3) return Array.from({ length: rand(4) }, () => make(d + 1));
+      return Object.fromEntries(Array.from({ length: rand(4) }, () => [str(), make(d + 1)]));
+    };
+    for (let round = 0; round < 1500; round++) {
+      const v = { root: make(0), list: [make(1), make(1)] };
+      const value = JSON.parse(JSON.stringify(v));          // a real JSON value (keys deduplicated)
+      for (const indent of [2, 4]) {
+        const y = T.toYaml(value, indent);
+        assert.deepEqual(back(y), value, `round ${round}, indent ${indent}:\n${y}`);
+      }
+    }
+  });
+
+  test('fuzz under YAML 1.1 rules: strings stay strings', () => {
+    let seed = 7;
+    const rand = n => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return (seed >>> 8) % n; };
+    const parts = ['yes', 'No', 'ON', 'off', 'y', 'n', '0', '07', '1', ':', '30', '.', '5', '_', '-', '+', 'e', 'x', 'b', 'o', 'inf', 'nan', '~', 'null', '<<', '='];
+    for (let round = 0; round < 3000; round++) {
+      const s = Array.from({ length: 1 + rand(4) }, () => parts[rand(parts.length)]).join('');
+      const doc = { [s]: s, list: [s] };
+      assert.deepEqual(back(T.toYaml(doc), '1.1'), doc, T.toYaml(doc));
+    }
+  });
+});
+
+describe('yamlTokens and renderTokens', () => {
+  test('tokens mark keys, strings, numbers, booleans and null', () => {
+    const y = T.toYaml({ name: 'Widget', num: 1.5, ok: true, z: null, q: 'yes', t: 'a\nb', l: ['x', 2] });
+    const tokens = T.yamlTokens(y).map(t => t.cls + ':' + y.slice(t.start, t.end));
+    assert.deepEqual(tokens, ['k:name', 's:Widget', 'k:num', 'n:1.5', 'k:ok', 'b:true', 'k:z', 'z:null', 'k:q', 's:"yes"', 'k:t', 's:a', 's:b', 'k:l', 's:x', 'n:2']);
+  });
+
+  test('tokens never overlap and stay inside the text, for any document', () => {
+    for (const doc of [trickyDoc(), SAMPLE, { t: '  x\n\ny\n' }, [[{ a: [] }]]]) {
+      const y = T.toYaml(doc, 2);
+      let last = 0;
+      for (const t of T.yamlTokens(y)) { assert.ok(t.start >= last && t.end > t.start && t.end <= y.length); last = t.end; }
+    }
+  });
+
+  test('renderTokens escapes everything and adds marks across token edges', () => {
+    const text = 'k: "<b>&"';
+    const html = T.renderTokens(text, [{ start: 0, end: 1, cls: 'k' }, { start: 3, end: 9, cls: 's' }], [{ start: 0, end: 5, i: 0 }]);
+    assert.equal(html, '<span class="k"><mark class="m" data-i="0">k</mark></span><mark class="m" data-i="0">: </mark>' +
+      '<span class="s"><mark class="m" data-i="0">"&lt;</mark></span><span class="s">b&gt;&amp;"</span>');
+    assert.equal(T.renderTokens(text, [], []), T.esc(text));
+  });
+});
+
+describe('searchText', () => {
+  test('finds matches in plain text with the same options', () => {
+    assert.deepEqual(T.searchText('name: Amina\nname2: amina', 'amina').matches, [{ start: 6, end: 11 }, { start: 19, end: 24 }]);
+    assert.deepEqual(T.searchText('name: Amina\nname2: amina', 'Amina', { caseSensitive: true }).matches, [{ start: 6, end: 11 }]);
+    assert.deepEqual(T.searchText('name name2', 'name', { wholeWord: true }).matches, [{ start: 0, end: 4 }]);
+    assert.match(T.searchText('x', '(', { regex: true }).error, /^Invalid pattern/);
+    assert.equal(T.searchText('a'.repeat(20), 'a', { limit: 5 }).truncated, true);
+  });
+});
+
 // ---------- share links ----------
 
 describe('share links', () => {
@@ -950,6 +1111,18 @@ describe('downloadName', () => {
     assert.equal(T.downloadName(null, false), 'formatted.json');
     assert.equal(T.downloadName('', true), 'minified.json');
     assert.equal(T.downloadName('.json', false), 'formatted.json');
+  });
+
+  test('other formats get their own extension', () => {
+    assert.equal(T.downloadName('data.json', false, 'yaml'), 'data.yaml');
+    assert.equal(T.downloadName('data.min.json', true, 'yaml'), 'data.yaml', 'minify does not apply to YAML');
+    assert.equal(T.downloadName(null, false, 'yaml'), 'formatted.yaml');
+    assert.equal(T.downloadName('data.json', false, 'csv'), 'data.csv');
+    assert.equal(T.downloadName(null, false, 'csv'), 'formatted.csv');
+    assert.equal(T.downloadName('data.json', false, 'ts'), 'data.types.ts');
+    assert.equal(T.downloadName('data.types.ts', false, 'ts'), 'data.types.ts');
+    assert.equal(T.downloadName(null, false, 'ts'), 'data.types.ts');
+    assert.equal(T.downloadName('data.json', false, 'json'), 'data.formatted.json');
   });
 
   test('strips folders and characters not allowed in file names', () => {

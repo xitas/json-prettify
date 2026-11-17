@@ -72,19 +72,42 @@
 
   // Does all the formatting work before anything is drawn, so a failure (for example
   // JSON.stringify running out of stack on very deep input) leaves nothing half-rendered.
+  // Output formats. JSON gets the tree, path bar and JSON-aware search; the others are shown
+  // as text in the Code view.
+  var FORMATS = {
+    json: { label: 'JSON', mime: 'application/json' },
+    yaml: { label: 'YAML', mime: 'application/yaml', convert: function (v, indent) { return { text: T.toYaml(v, indent) }; }, tokens: T.yamlTokens }
+  };
+  var outFormat = 'json';
+  var FORMAT_KEY = 'json-formatter-format', outFormatSel = $('outFormat');
+  try {
+    var savedFormat = localStorage.getItem(FORMAT_KEY);
+    if (FORMATS[savedFormat]) outFormat = outFormatSel.value = savedFormat;
+  } catch (e) {}
+
   function formatValue(value, inBytes) {
     if (sortBox.checked) value = sortKeys(value);
     var indent = indentSel.value === 'tab' ? '\t' : +indentSel.value;
-    var result = mode === 'minify' ? JSON.stringify(value) : JSON.stringify(value, null, indent);
-    var html = result.length <= HIGHLIGHT_LIMIT ? highlight(result) : null;
+    var json = mode === 'minify' ? JSON.stringify(value) : JSON.stringify(value, null, indent);
+    var fmt = FORMATS[outFormat], result = json, tokens = null, unsupported = null;
+    if (fmt.convert) {
+      var converted = fmt.convert(value, indent);
+      if (converted.error) unsupported = converted.error;
+      result = converted.text || '';
+    }
+    var html = null;
+    if (result.length <= HIGHLIGHT_LIMIT) {
+      if (fmt.convert) { tokens = fmt.tokens(result); html = T.renderTokens(result, tokens, []); }
+      else html = highlight(result);
+    }
     var outBytes = byteLen(result);
     var meta = [fmtBytes(outBytes)];
-    if (mode === 'minify' && inBytes > 0) {
+    if (mode === 'minify' && outFormat === 'json' && inBytes > 0) {
       var saved = Math.round((1 - outBytes / inBytes) * 100);
       meta = [fmtBytes(inBytes) + ' \u2192 ' + fmtBytes(outBytes)];
       if (saved > 0) meta.push('\u2212' + saved + '%');
     }
-    return { value: value, result: result, html: html, meta: meta, stats: measure(value) };
+    return { value: value, result: result, html: html, tokens: tokens, unsupported: unsupported, meta: meta, stats: measure(value) };
   }
 
   function isTooDeep(e) {
@@ -146,7 +169,7 @@
     refreshInputGutter();
     markErrorLine(null);
     inMeta.innerHTML = text.length ? badges([fmtBytes(bytes), plural(T.countLines(text), 'line', 'lines')]) : '';
-    outTitle.textContent = mode === 'minify' ? 'Minified' : 'Formatted';
+    outTitle.textContent = outFormat === 'json' ? (mode === 'minify' ? 'Minified JSON' : 'Formatted JSON') : FORMATS[outFormat].label + ' output';
     var view;
 
     if (!text.trim()) {
@@ -197,6 +220,7 @@
         if (formatted.html !== null) outCode.innerHTML = formatted.html;
         else outCode.textContent = formatted.result;
         lastHtml = formatted.html;
+        lastTokens = formatted.tokens;
         codeHasMarks = false;
         outCode.classList.toggle('hl', formatted.html !== null);
         setGutterLines('output', outGutter, outTrack, T.countLines(formatted.result));
@@ -205,7 +229,8 @@
         outMeta.innerHTML = badges(formatted.meta);
         btnCopy.disabled = false;
         btnUse.disabled = false;
-        btnCopyPath.disabled = btnCopyValue.disabled = false;
+        btnCopyPath.disabled = btnCopyValue.disabled = outFormat !== 'json';
+        btnUse.disabled = outFormat !== 'json';
         btnDownload.disabled = false;
         btnShare.disabled = false;
 
@@ -226,7 +251,7 @@
     // Fade in only when what is shown changes, not on every keystroke.
     if (view !== lastView) {
       reveal(statusEl);
-      reveal(!outEmpty.hidden ? outEmpty : outView === 'tree' ? treeView : output);
+      reveal(!outEmpty.hidden ? outEmpty : currentView() === 'tree' ? treeView : output);
       lastView = view;
     }
   }
@@ -388,15 +413,19 @@
   } catch (e) {}
 
   // Shows the current result in the chosen view (only called when there is a result).
+  // The view actually shown: the tree only applies to JSON.
+  function currentView() { return outFormat === 'json' ? outView : 'code'; }
+
   function showResult() {
     outEmpty.hidden = true;
-    pathBar.hidden = false;
+    pathBar.hidden = outFormat !== 'json';
     // Keep the selected path while it still exists in the (possibly edited) data.
     if (T.valueAtPath(treeValue, selectedParts) === undefined) selectedParts = [];
     renderCrumbs();
-    output.hidden = outView !== 'code';
-    treeView.hidden = outView !== 'tree';
-    if (outView === 'tree' && treeDirty) buildTree();
+    var view = currentView();
+    output.hidden = view !== 'code';
+    treeView.hidden = view !== 'tree';
+    if (view === 'tree' && treeDirty) buildTree();
   }
 
   function setOutView(view, save) {
@@ -406,11 +435,11 @@
     btnViewCode.setAttribute('aria-pressed', String(view === 'code'));
     btnViewTree.setAttribute('aria-pressed', String(view === 'tree'));
     if (save) { try { localStorage.setItem(VIEW_KEY, view); } catch (e) {} }
-    btnFilter.hidden = view !== 'tree';
+    btnFilter.hidden = currentView() !== 'tree';
     if (lastOutput) {
       showResult();
-      reveal(view === 'tree' ? treeView : output);
-      if (view === 'code' && codeMarksDirty) renderCodeMarks();
+      reveal(currentView() === 'tree' ? treeView : output);
+      if (currentView() === 'code' && codeMarksDirty) renderCodeMarks();
       if (searchActive() && current >= 0) showCurrent();
     }
   }
@@ -1041,7 +1070,7 @@
   }
   output.addEventListener('click', function () {
     var offset = codeOffset();
-    if (offset === null || !lastOutput) return;
+    if (offset === null || !lastOutput || outFormat !== 'json') return;
     try { selectPath(T.pathAtOffset(lastOutput, offset)); } catch (e) {}
   });
   // Selects a value's text in the Code view and scrolls it into view.
@@ -1150,7 +1179,7 @@
   var searchOpen = false, searchFilter = false, searchReturn = null, searchTimer = null, searchGen = 0, searching = false;
   var hits = [], hitsTruncated = false, hitsError = null, current = -1;
   var matchIndex = null, treeFilter = null, savedTreeState = null;
-  var lastHtml = null, codeHasMarks = false, codeMarksDirty = false;
+  var lastHtml = null, lastTokens = null, codeHasMarks = false, codeMarksDirty = false;
 
   function searchActive() { return searchOpen && !!searchInput.value && !!lastOutput; }
 
@@ -1165,6 +1194,14 @@
     $('btnSearchWord').setAttribute('aria-pressed', String(searchOpts.wholeWord));
     $('btnSearchRegex').setAttribute('aria-pressed', String(searchOpts.regex));
     btnFilter.setAttribute('aria-pressed', String(searchFilter));
+    // Keys / Values only mean something for JSON; other formats search their text.
+    var json = outFormat === 'json';
+    for (var k = 0; k < scopes.length; k++) {
+      scopes[k].disabled = !json;
+      scopes[k].title = json ? '' : 'Only for JSON output; ' + FORMATS[outFormat].label + ' is searched as text';
+    }
+    searchInput.setAttribute('aria-label', json ? 'Search keys and values' : 'Search the ' + FORMATS[outFormat].label + ' output');
+    searchInput.placeholder = json ? 'Search keys and values' : 'Search the ' + FORMATS[outFormat].label;
   }
   function setSearchOption(name, value) {
     searchOpts[name] = value;
@@ -1212,6 +1249,17 @@
       return;
     }
     var prev = keepCurrent && current >= 0 ? hits[current] : null;
+    if (outFormat !== 'json') {
+      // Other formats: search the text that is showing.
+      var r = T.searchText(lastOutput, query, searchOpts), same = -1;
+      for (var j = 0; prev && j < r.matches.length; j++) if (r.matches[j].start === prev.start) { same = j; break; }
+      searching = false;
+      setHits(r.matches, r.truncated, r.error, null, same);
+      announce(countMessage());
+      if (current >= 0) showCurrent();
+      if (then) then();
+      return;
+    }
     var s = T.createSearch(treeValue, query, searchOpts);
     searching = true;
     (function step() {
@@ -1248,7 +1296,7 @@
     hitsError = error;
     current = keep >= 0 ? keep : list.length ? 0 : -1;
     matchIndex = null;
-    if (list.length) {
+    if (list.length && list[0].path) {
       matchIndex = new Map();
       for (var i = 0; i < list.length; i++) {
         var p = T.formatPath(list[i].path, 'js'), e = matchIndex.get(p);
@@ -1258,7 +1306,7 @@
     }
     if (!treeDirty) refreshTreeMatches();
     codeMarksDirty = true;
-    if (outView === 'code' && lastOutput) renderCodeMarks();
+    if (currentView() === 'code' && lastOutput) renderCodeMarks();
     applyFilter();
     updateSearchStatus(note);
   }
@@ -1293,8 +1341,9 @@
   function showCurrent() {
     var m = hits[current];
     if (!m) return;
+    if (!m.path) { markCurrentCode(true); return; }   // a text match (YAML, CSV, TypeScript)
     selectPath(m.path);
-    if (outView === 'tree') {
+    if (currentView() === 'tree') {
       if (treeDirty) return;
       var row = revealInTree(m.path, false);
       markCurrentTree(row);
@@ -1440,20 +1489,22 @@
       }
       return;
     }
-    var ranges = T.locateMatches(lastOutput, hits), list = [];
+    var ranges = hits[0].path ? T.locateMatches(lastOutput, hits) : hits, list = [];
     for (var i = 0; i < ranges.length; i++) if (ranges[i]) list.push({ start: ranges[i].start, end: ranges[i].end, i: i });
-    outCode.innerHTML = T.highlightMarked(lastOutput, list, lastHtml !== null);
+    outCode.innerHTML = hits[0].path ? T.highlightMarked(lastOutput, list, lastHtml !== null)
+      : T.renderTokens(lastOutput, lastHtml !== null && lastTokens ? lastTokens : [], list);
     codeHasMarks = true;
     markCurrentCode(false);
   }
   function markCurrentCode(scroll) {
-    var old = outCode.querySelector('mark.current');
-    if (old) old.classList.remove('current');
+    var old = outCode.querySelectorAll('mark.current');
+    for (var o = 0; o < old.length; o++) old[o].classList.remove('current');
     if (current < 0) return;
-    var mk = outCode.querySelector('mark[data-i="' + current + '"]');
-    if (!mk) return;
-    mk.classList.add('current');
-    if (scroll) scrollIntoBox(output, mk);
+    // A text match can be split across several marks (one per highlighted token).
+    var mks = outCode.querySelectorAll('mark[data-i="' + current + '"]');
+    if (!mks.length) return;
+    for (var k = 0; k < mks.length; k++) mks[k].classList.add('current');
+    if (scroll) scrollIntoBox(output, mks[0]);
   }
 
   // ---- Filter (tree only) ----
@@ -1474,16 +1525,16 @@
   // Turns the filtered tree on or off to match the Filter toggle and the current results.
   // Turning it off restores the open rows and active row from before.
   function applyFilter() {
-    var want = searchFilter && searchActive() && !hitsError;
+    var want = searchFilter && searchActive() && !hitsError && outFormat === 'json';
     if (want) {
       if (!treeFilter && rootRow()) savedTreeState = captureTreeState();
       treeFilter = buildFilterSets(hits);
-      if (outView === 'tree') buildTree({}); else treeDirty = true;
+      if (currentView() === 'tree') buildTree({}); else treeDirty = true;
     } else if (treeFilter) {
       treeFilter = null;
       var state = savedTreeState;
       savedTreeState = null;
-      if (outView === 'tree' && lastOutput) buildTree({ restore: state });
+      if (currentView() === 'tree' && lastOutput) buildTree({ restore: state });
       else { treeDirty = true; pendingTreeRestore = state; }
     }
   }
@@ -1716,6 +1767,15 @@
   }
   window.addEventListener('hashchange', openShareHash);
 
+  // ---- Output format choice ----
+  outFormatSel.addEventListener('change', function () {
+    outFormat = FORMATS[outFormatSel.value] ? outFormatSel.value : 'json';
+    try { localStorage.setItem(FORMAT_KEY, outFormat); } catch (e) {}
+    syncSearchOptions();
+    btnFilter.hidden = currentView() !== 'tree';
+    update();
+  });
+
   // ---- Download ----
   // Saves the output as a .json file made in the browser (a Blob), so it works offline.
   var btnDownload = $('btnDownload');
@@ -1726,8 +1786,8 @@
       showToast('Nothing to download yet: the input needs to be valid JSON');
       return;
     }
-    var name = T.downloadName(loadedFileName, mode === 'minify');
-    var url = URL.createObjectURL(new Blob([lastOutput], { type: 'application/json' }));
+    var name = T.downloadName(loadedFileName, mode === 'minify', outFormat);
+    var url = URL.createObjectURL(new Blob([lastOutput], { type: FORMATS[outFormat].mime }));
     var a = el('a');
     a.href = url;
     a.download = name;

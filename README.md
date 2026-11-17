@@ -16,6 +16,7 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 - **Tree view** of the output: fold and unfold objects and arrays, expand to a level, and move around with the keyboard; large arrays show 100 items at a time
 - **Copy path or value** of any node as JavaScript, JSONPath, jq or JSON Pointer: click a key, use the copy icon, or press `C` / `Shift + C` in the tree; a breadcrumb shows where you are
 - **Share** a link with the JSON (and your view settings) stored inside the link itself, compressed in the part after `#`, which browsers never send to a server. Nothing is uploaded; anyone with the link can see the JSON
+- **Output as JSON or YAML**, with YAML that quotes anything a YAML parser could misread
 - **Search** the output in both views: keys, values or both, match case, whole word and regex, with next/previous, a match count and a Filter that shows only matching branches of the tree
 - **Syntax highlighting** for keys, strings, numbers, booleans and null
 - **Copy** the result, **download** it as a `.json` file (a loaded `data.json` saves as `data.formatted.json` or `data.min.json`), or use it as the new input
@@ -61,13 +62,14 @@ Then visit `http://localhost:8000`.
 
 ## Running tests
 
-The helpers in `assets/js/json-tools.js` have unit tests that use Node's built-in test runner, so there is nothing to install. With Node.js 22 or newer:
+The helpers in `assets/js/json-tools.js` have unit tests that use Node's built-in test runner. A few tests check the converters against real parsers and compilers (`yaml`, `typescript`), installed as dev dependencies. The page itself never loads anything from npm. With Node.js 22 or newer:
 
 ```bash
-node --test
+npm ci
+npm test
 ```
 
-Known bugs are recorded as tests marked `todo`: they describe the correct behavior, run with the rest of the suite and show up as `TODO` in the output, but do not fail it until the bug is fixed. There are no known bugs at the moment. GitHub Actions runs the same command on every push and pull request.
+Known bugs are recorded as tests marked `todo`: they describe the correct behavior, run with the rest of the suite and show up as `TODO` in the output, but do not fail it until the bug is fixed. There are no known bugs at the moment. GitHub Actions runs the same commands on every push and pull request.
 
 ## Usage
 

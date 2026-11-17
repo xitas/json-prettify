@@ -118,7 +118,15 @@
       </section>
       <section class="pane" aria-label="Result">
         <div class="pane-head out-head">
-          <span class="title" id="outTitle">Formatted</span>
+          <span class="sr-only" id="outTitle">Formatted JSON</span>
+          <label class="title" for="outFormat">Output as</label>
+          <span class="select-wrap select-sm out-format">
+            <select id="outFormat">
+              <option value="json" selected>JSON</option>
+              <option value="yaml">YAML</option>
+            </select>
+            <svg class="icon chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg>
+          </span>
           <span id="outMeta" class="badges"></span>
           <div class="actions">
             <button id="btnSearch" class="btn-sm btn-icon" type="button" aria-label="Search" aria-expanded="false" aria-controls="searchBar" title="Search (Ctrl/Cmd + F or /)">

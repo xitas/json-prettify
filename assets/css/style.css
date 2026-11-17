@@ -1021,6 +1021,18 @@ button.tree-copy .icon {
 .out-head .actions {
   flex-wrap: nowrap;
 }
+.out-head {
+  column-gap: var(--space-2);
+}
+.out-head .title {
+  white-space: nowrap;
+}
+.out-format select {
+  min-width: 84px;
+}
+.out-head .btn-collapse {
+  padding: 0 10px;
+}
 .more-wrap {
   position: relative;
 }
@@ -1073,7 +1085,7 @@ button.tree-copy .icon {
 }
 /* In a narrow pane, Copy and Download show only their icons (the text stays for screen
    readers). */
-@container pane (max-width: 540px) {
+@container pane (max-width: 560px) {
   .btn-collapse {
     width: var(--control-h-sm);
     padding: 0;

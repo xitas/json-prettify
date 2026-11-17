@@ -752,7 +752,7 @@
   }
 
   // Text a value is searched as: strings without quotes; numbers, true, false, null as written.
-  function searchText(v) {
+  function valueText(v) {
     return typeof v === 'string' ? v : JSON.stringify(v);
   }
 
@@ -798,7 +798,7 @@
       if (!started) {
         started = true;
         if (root !== null && typeof root === 'object') push(root);
-        else return finish(valuesOn && scan(searchText(root), 'value'));
+        else return finish(valuesOn && scan(valueText(root), 'value'));
       }
       while (frames.length && budget-- > 0) {
         var f = frames[frames.length - 1];
@@ -810,7 +810,7 @@
         if (f.keys && keysOn && !scan(key, 'key')) return finish();
         if (child !== null && typeof child === 'object') push(child);
         else {
-          if (valuesOn && !scan(searchText(child), 'value')) return finish();
+          if (valuesOn && !scan(valueText(child), 'value')) return finish();
           parts.pop();
         }
       }
@@ -955,6 +955,218 @@
     return out.join('');
   }
 
+  // ---- Other output formats: shared pieces ----
+
+  // Renders text with syntax tokens ([{ start, end, cls }], sorted, not overlapping) and
+  // search ranges ([{ start, end, i }], sorted) as HTML. Ranges may cross token edges; the
+  // pieces of one range share its data-i.
+  function renderTokens(text, tokens, ranges) {
+    var out = [], ti = 0, ri = 0, pos = 0, n = text.length;
+    ranges = ranges || [];
+    while (pos < n) {
+      while (ti < tokens.length && tokens[ti].end <= pos) ti++;
+      while (ri < ranges.length && ranges[ri].end <= pos) ri++;
+      var t = tokens[ti], r = ranges[ri], next = n;
+      var inT = t && t.start <= pos, inR = r && r.start <= pos;
+      if (t) next = Math.min(next, inT ? t.end : t.start);
+      if (r) next = Math.min(next, inR ? r.end : r.start);
+      var piece = esc(text.slice(pos, next));
+      if (inR) piece = '<mark class="m" data-i="' + r.i + '">' + piece + '</mark>';
+      if (inT) piece = '<span class="' + t.cls + '">' + piece + '</span>';
+      out.push(piece);
+      pos = next;
+    }
+    return out.join('');
+  }
+
+  // Searches plain text (used for YAML, CSV and TypeScript output): { matches: [{ start,
+  // end }], truncated, error }. Same options as createSearch; scope does not apply.
+  function searchText(text, query, options) {
+    var opts = options || {}, limit = opts.limit || 10000, m = buildMatcher(query, opts);
+    var res = { matches: [], truncated: false, error: m.error || null };
+    if (!m.re) return res;
+    var re = m.re, r;
+    re.lastIndex = 0;
+    while ((r = re.exec(text))) {
+      if (r[0] === '') {
+        if (r.index >= text.length) break;
+        re.lastIndex = r.index + (text.codePointAt(r.index) > 0xffff ? 2 : 1);
+        continue;
+      }
+      if (res.matches.length >= limit) { res.truncated = true; break; }
+      res.matches.push({ start: r.index, end: r.index + r[0].length });
+    }
+    return res;
+  }
+
+  // ---- YAML ----
+
+  var YAML_WORDS = /^(?:null|Null|NULL|~|true|True|TRUE|false|False|FALSE|yes|Yes|YES|no|No|NO|on|On|ON|off|Off|OFF|y|Y|n|N|=|<<)$/;
+  var LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?:^|[^\ud800-\udbff])[\udc00-\udfff]/;
+  var YAML_UNPRINTABLE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u2028\u2029\ufeff]/;
+
+  // Whether a string can be written without quotes and still read back as the same string
+  // in YAML 1.2 and in YAML 1.1 parsers (which also treat yes/no/on/off and more as values).
+  function yamlPlain(s) {
+    return s !== '' && !YAML_WORDS.test(s) &&
+      !/^\s|\s$/.test(s) &&                                   // leading or trailing spaces
+      !/^[-?:,[\]{}#&*!|>'"%@`]/.test(s) &&                   // starts with an indicator
+      !/[:#\t\r\n]/.test(s) &&                                 // : and # can start mappings and comments
+      !/^[-+]?(?:[0-9]|\.[0-9]|\.(?:inf|nan)$)/i.test(s) &&   // numbers, dates, 0x1F, .5, .inf
+      !/^\.(?:inf|nan)$/i.test(s) &&
+      !/^[-+]?\.[0-9._]*(?:[eE][-+]?[0-9]+)?$/.test(s) &&    // ".", "..", "._": floats in YAML 1.1
+      !/^[-+]?[0-9._]*[eE][-+]?[0-9]+$/.test(s) &&            // "e5": read as a float by some parsers
+      !YAML_UNPRINTABLE.test(s) && !LONE_SURROGATE.test(s);
+  }
+
+  // A double-quoted YAML string. Characters YAML does not allow as-is are escaped.
+  function yamlQuote(s) {
+    var out = '"';
+    for (var i = 0; i < s.length; i++) {
+      var ch = s.charAt(i), c = s.charCodeAt(i);
+      if (ch === '"' || ch === '\\') { out += '\\' + ch; continue; }
+      if (c === 10) { out += '\\n'; continue; }
+      if (c === 13) { out += '\\r'; continue; }
+      if (c === 9) { out += '\\t'; continue; }
+      var lone = (c >= 0xd800 && c <= 0xdbff && !(s.charCodeAt(i + 1) >= 0xdc00 && s.charCodeAt(i + 1) <= 0xdfff)) ||
+        (c >= 0xdc00 && c <= 0xdfff && !(s.charCodeAt(i - 1) >= 0xd800 && s.charCodeAt(i - 1) <= 0xdbff));
+      if (c < 0x20 || (c >= 0x7f && c <= 0x9f) || c === 0x2028 || c === 0x2029 || c === 0xfeff || lone) {
+        out += '\\u' + ('000' + c.toString(16)).slice(-4);
+      } else {
+        out += ch;
+      }
+    }
+    return out + '"';
+  }
+
+  // Whether a multi-line string can be written as a literal block scalar (|).
+  function yamlBlockOk(s) {
+    return s.indexOf('\n') !== -1 && /\S/.test(s) && s.indexOf('\r') === -1 &&
+      !YAML_UNPRINTABLE.test(s) && !LONE_SURROGATE.test(s);
+  }
+
+  // A scalar or empty container: { head, body } where body holds the lines of a block
+  // scalar (without indentation; the caller indents them). A block scalar that needs an
+  // indentation indicator is only used as a mapping value (where its meaning is clear);
+  // elsewhere such strings are double-quoted.
+  function yamlScalar(v, unit, inMapping) {
+    if (v === null) return { head: 'null', body: [] };
+    if (Array.isArray(v)) return { head: '[]', body: [] };
+    if (typeof v === 'object') return { head: '{}', body: [] };
+    if (typeof v !== 'string') return { head: JSON.stringify(v), body: [] };
+    if (yamlPlain(v)) return { head: v, body: [] };
+    var indicator = /^\S/.test(v) ? '' : String(unit.length);
+    if (!yamlBlockOk(v) || (indicator && !inMapping)) return { head: yamlQuote(v), body: [] };
+    // Literal block with the chomping indicator that keeps trailing newlines exactly:
+    // - (none), clip (one), + (keep all).
+    var trailing = /\n*$/.exec(v)[0].length;
+    var chomp = trailing === 0 ? '-' : trailing === 1 ? '' : '+';
+    var lines = v.slice(0, v.length - trailing).split('\n');
+    for (var k = 1; k < trailing; k++) lines.push('');
+    return { head: '|' + indicator + chomp, body: lines };
+  }
+
+  function yamlKey(k) {
+    return yamlPlain(k) ? k : yamlQuote(k);
+  }
+
+  function isFilled(v) {
+    return v !== null && typeof v === 'object' && (Array.isArray(v) ? v.length > 0 : Object.keys(v).length > 0);
+  }
+
+  function pushScalar(out, prefix, sc, bodyIndent) {
+    out.push(prefix + sc.head);
+    for (var i = 0; i < sc.body.length; i++) out.push(sc.body[i] === '' ? '' : bodyIndent + sc.body[i]);
+  }
+
+  function yamlLines(v, ind, unit, out) {
+    var i, x, start;
+    if (Array.isArray(v)) {
+      for (i = 0; i < v.length; i++) {
+        x = v[i];
+        if (isFilled(x)) {
+          // Compact form: the first line of the nested block goes right after "- ".
+          start = out.length;
+          yamlLines(x, ind + '  ', unit, out);
+          out[start] = ind + '- ' + out[start].slice(ind.length + 2);
+        } else {
+          pushScalar(out, ind + '- ', yamlScalar(x, unit, false), ind + unit);
+        }
+      }
+      return;
+    }
+    var keys = Object.keys(v);
+    for (i = 0; i < keys.length; i++) {
+      x = v[keys[i]];
+      var key = yamlKey(keys[i]);
+      if (key.length > 1000) {
+        // Implicit keys are limited to 1024 characters; long ones use the explicit form.
+        out.push(ind + '? ' + key);
+        if (isFilled(x)) { out.push(ind + ':'); yamlLines(x, ind + unit, unit, out); }
+        else pushScalar(out, ind + ': ', yamlScalar(x, unit, false), ind + unit);
+      } else if (isFilled(x)) {
+        out.push(ind + key + ':');
+        yamlLines(x, ind + unit, unit, out);
+      } else {
+        pushScalar(out, ind + key + ': ', yamlScalar(x, unit, true), ind + unit);
+      }
+    }
+  }
+
+  // Serializes a JSON value as YAML, ending with a newline (which also keeps the last line
+  // break of a |+ block). indent: 2, 4 or '\t' (YAML does not allow tabs for indentation,
+  // so Tab uses 4 spaces).
+  function toYaml(value, indent) {
+    var unit = indent === '\t' || indent === 'tab' ? '    ' : new Array((+indent || 2) + 1).join(' ');
+    var out = [];
+    if (isFilled(value)) yamlLines(value, '', unit, out);
+    else pushScalar(out, '', yamlScalar(value, unit, false), unit);
+    return out.join('\n') + '\n';
+  }
+
+  // Syntax tokens for YAML written by toYaml: keys, strings, numbers, booleans and null.
+  function yamlTokens(text) {
+    var tokens = [], lines = text.split('\n'), pos = 0, block = -1;
+    function scalar(s, at) {
+      if (!s) return;
+      var cls = s.charAt(0) === '"' ? 's' : /^(?:null|~)$/.test(s) ? 'z' : /^(?:true|false)$/.test(s) ? 'b' :
+        /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][-+]?\d+)?$/.test(s) ? 'n' : /^(?:\{\}|\[\]|\|\d?[-+]?)$/.test(s) ? null : 's';
+      if (cls) tokens.push({ start: at, end: at + s.length, cls: cls });
+    }
+    function quotedEnd(s, i) {
+      for (i++; i < s.length; i++) { if (s.charAt(i) === '\\') i++; else if (s.charAt(i) === '"') return i + 1; }
+      return s.length;
+    }
+    for (var li = 0; li < lines.length; li++) {
+      var line = lines[li], indent = /^ */.exec(line)[0].length;
+      if (block >= 0 && (line === '' || indent > block)) {   // inside a block scalar
+        if (line.length > indent) tokens.push({ start: pos + indent, end: pos + line.length, cls: 's' });
+        pos += line.length + 1;
+        continue;
+      }
+      block = -1;
+      var i = indent;
+      while (line.substr(i, 2) === '- ') i += 2;
+      var dashEnd = i, rest = line.slice(i), value = rest, valueAt = i;
+      if (rest.charAt(0) === '?' && rest.charAt(1) === ' ') { scalar(rest.slice(2), pos + i + 2); pos += line.length + 1; continue; }
+      if (rest.charAt(0) === ':' && (rest.length === 1 || rest.charAt(1) === ' ')) { value = rest.slice(2); valueAt = i + 2; }
+      else {
+        var keyEnd = rest.charAt(0) === '"' ? quotedEnd(rest, 0) : rest.indexOf(':');
+        if (keyEnd > 0 && rest.charAt(keyEnd) === ':' && (keyEnd + 1 === rest.length || rest.charAt(keyEnd + 1) === ' ')) {
+          tokens.push({ start: pos + i, end: pos + i + keyEnd, cls: 'k' });
+          value = rest.slice(keyEnd + 2);
+          valueAt = i + keyEnd + 2;
+        } else if (rest.charAt(0) !== '"' && keyEnd > 0 && rest.charAt(keyEnd) === ':') {
+          value = rest;
+        }
+      }
+      scalar(value, pos + valueAt);
+      if (/^\|\d?[-+]?$/.test(value)) block = dashEnd > indent ? dashEnd - 2 : indent;
+      pos += line.length + 1;
+    }
+    return tokens;
+  }
+
   // ---- Share links ----
   // The JSON travels inside the link's hash (#...), which browsers never send to a server.
   // Format: j1=<crc32>.<base64url of deflate-raw bytes>  or  u1=<crc32>.<base64url of the
@@ -1081,10 +1293,13 @@
   // File name for downloading the output. A loaded file's name is reused (data.json ->
   // data.formatted.json, or data.min.json when minified); otherwise formatted.json or
   // minified.json. Characters that are not allowed in file names become "_".
-  function downloadName(sourceName, minified) {
+  // format: 'json' (default), 'yaml' (data.yaml), 'csv' (data.csv) or 'ts' (data.types.ts).
+  function downloadName(sourceName, minified, format) {
     var base = sourceName ? String(sourceName).replace(/^.*[\\/]/, '') : '';
-    base = base.replace(/\.[^.]*$/, '').replace(/\.(min|formatted)$/i, '');
+    base = base.replace(/\.[^.]*$/, '').replace(/\.(min|formatted|types)$/i, '');
     base = base.replace(/[\u0000-\u001f<>:"|?*]+/g, '_').replace(/^[\s.]+|[\s.]+$/g, '');
+    if (format === 'yaml' || format === 'csv') return (base || 'formatted') + '.' + format;
+    if (format === 'ts') return (base || 'data') + '.types.ts';
     if (!base) return minified ? 'minified.json' : 'formatted.json';
     return base + (minified ? '.min.json' : '.formatted.json');
   }
@@ -1150,6 +1365,11 @@
     copyValueText: copyValueText,
     pathAtOffset: pathAtOffset,
     rangeOfPath: rangeOfPath,
+    renderTokens: renderTokens,
+    searchText: searchText,
+    yamlPlain: yamlPlain,
+    toYaml: toYaml,
+    yamlTokens: yamlTokens,
     downloadName: downloadName,
     crc32: crc32,
     base64urlEncode: base64urlEncode,
