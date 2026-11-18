@@ -21,5 +21,7 @@ jobs:
           cache: npm
       - name: Install test-only dependencies
         run: npm ci
+      - name: Download the JSON Schema Test Suite (test fixture, not committed)
+        run: npm run schema-suite
       - name: Run unit tests
         run: node --test

@@ -2226,6 +2226,661 @@
     }
   }
 
+  // ---- JSON Schema ----
+  // A validator for draft 2020-12 and draft-07, as plain code (no eval, no generated code).
+  // References are resolved only inside the schema (and documents the caller passes in
+  // options.schemas); nothing is ever downloaded.
+
+  var SCHEMA_DRAFTS = {
+    'json-schema.org/draft/2020-12/schema': '2020-12',
+    'json-schema.org/draft/2019-09/schema': '2019-09',
+    'json-schema.org/draft-07/schema': '07',
+    'json-schema.org/draft-06/schema': '06',
+    'json-schema.org/draft-04/schema': '04'
+  };
+  // The draft a $schema URI names: '2020-12', '2019-09', '07', '06', '04' or null.
+  function draftOfUri(uri) {
+    if (typeof uri !== 'string') return null;
+    var key = uri.replace(/^https?:\/\//, '').replace(/#$/, '');
+    return SCHEMA_DRAFTS[key] || null;
+  }
+  // Which rules to check a schema with: { draft: '2020-12' | '07', named: the $schema
+  // value or null, note: a sentence when it differs from what was named, or null }.
+  function schemaDialect(schema, fallback) {
+    var named = schema !== null && typeof schema === 'object' && typeof schema.$schema === 'string' ? schema.$schema : null;
+    var d = draftOfUri(named), def = fallback === '07' ? '07' : '2020-12';
+    if (!named) return { draft: def, named: null, note: null };
+    if (d === '2020-12' || d === '07') return { draft: d, named: named, note: null };
+    if (d === '2019-09') return { draft: '2020-12', named: named, note: 'Draft 2019-09 is checked with the draft 2020-12 rules.' };
+    if (d === '06' || d === '04') return { draft: '07', named: named, note: 'Draft-' + d + ' is checked with the draft-07 rules.' };
+    return { draft: def, named: named, note: 'The $schema "' + named + '" isn\u2019t a known draft, so the draft ' + def + ' rules are used.' };
+  }
+
+  var SCHEMA_BASE = 'json-prettify:schema';
+  function stripFragment(u) { var i = u.indexOf('#'); return i < 0 ? u : u.slice(0, i); }
+  function resolveUri(base, ref) {
+    if (ref.charAt(0) === '#') return stripFragment(base) + ref;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(ref) && !/^[a-z][a-z0-9+.-]*:\/\//i.test(ref)) return ref;   // urn:, tag: and the like
+    try { return new URL(ref, base).href; } catch (e) {}
+    return ref;
+  }
+  function normalUri(u) {
+    var r = resolveUri(SCHEMA_BASE, u);
+    return /#$/.test(r) ? r.slice(0, -1) : r;
+  }
+
+  // A problem with the schema itself (bad pattern, missing reference...).
+  function SchemaProblem(message) { this.schemaError = message; }
+  var TIMED_OUT = { timeout: true };
+
+  // Keywords whose values are schemas, by shape.
+  var SUB_MAP = ['$defs', 'definitions', 'properties', 'patternProperties', 'dependentSchemas'];
+  var SUB_ONE = ['additionalProperties', 'additionalItems', 'contains', 'propertyNames', 'not', 'if', 'then', 'else', 'unevaluatedProperties', 'unevaluatedItems', 'items'];
+  var SUB_LIST = ['allOf', 'anyOf', 'oneOf', 'prefixItems', 'items'];
+
+  // Indexes schema documents: resources by base URI, anchors, dynamic anchors, and the
+  // base URI of every schema object.
+  function schemaRegistry(draft) {
+    var reg = { draft: draft, resources: new Map(), anchors: new Map(), dynamic: new Map(), base: new Map(), unevaluated: false };
+    reg.add = function (doc, base) {
+      reg.resources.set(base, doc);   // the address it was given under, and its own $id
+      if (doc !== null && typeof doc === 'object' && typeof doc.$id === 'string' && !(draft === '07' && hasOwn(doc, '$ref')) && doc.$id.charAt(0) !== '#') {
+        base = stripFragment(resolveUri(base, doc.$id));
+      }
+      reg.resources.set(base, doc);
+      walk(doc, base);
+    };
+    function walk(node, base) {
+      if (node === null || typeof node !== 'object' || Array.isArray(node) || reg.base.has(node)) return;
+      var id = node.$id;
+      if (typeof id === 'string' && !(draft === '07' && hasOwn(node, '$ref'))) {
+        if (id.charAt(0) === '#') {
+          if (draft === '07') reg.anchors.set(stripFragment(base) + id, node);
+        } else {
+          var abs = resolveUri(base, id), frag = abs.indexOf('#') >= 0 ? abs.slice(abs.indexOf('#') + 1) : '';
+          base = stripFragment(abs);
+          reg.resources.set(base, node);
+          if (draft === '07' && frag && frag.charAt(0) !== '/') reg.anchors.set(base + '#' + frag, node);
+        }
+      }
+      reg.base.set(node, base);
+      if (draft === '2020-12') {
+        if (typeof node.$anchor === 'string') reg.anchors.set(base + '#' + node.$anchor, node);
+        if (typeof node.$dynamicAnchor === 'string') {
+          reg.anchors.set(base + '#' + node.$dynamicAnchor, node);
+          if (!reg.dynamic.has(base)) reg.dynamic.set(base, new Map());
+          reg.dynamic.get(base).set(node.$dynamicAnchor, node);
+        }
+        if (hasOwn(node, 'unevaluatedProperties') || hasOwn(node, 'unevaluatedItems')) reg.unevaluated = true;
+      }
+      var k, i, v;
+      for (k = 0; k < SUB_MAP.length; k++) {
+        v = node[SUB_MAP[k]];
+        if (v !== null && typeof v === 'object' && !Array.isArray(v) && hasOwn(node, SUB_MAP[k])) for (var key in v) if (hasOwn(v, key)) walk(v[key], base);
+      }
+      for (k = 0; k < SUB_ONE.length; k++) if (hasOwn(node, SUB_ONE[k])) walk(node[SUB_ONE[k]], base);
+      for (k = 0; k < SUB_LIST.length; k++) {
+        v = node[SUB_LIST[k]];
+        if (Array.isArray(v) && hasOwn(node, SUB_LIST[k])) for (i = 0; i < v.length; i++) walk(v[i], base);
+      }
+      if (draft === '07' && node.dependencies !== null && typeof node.dependencies === 'object') {
+        for (k in node.dependencies) if (hasOwn(node.dependencies, k) && !Array.isArray(node.dependencies[k])) walk(node.dependencies[k], base);
+      }
+    }
+    // Where a reference leads: { node, base }. Throws SchemaProblem when it leads outside.
+    reg.resolve = function (ref, from) {
+      var abs = resolveUri(reg.base.get(from) || SCHEMA_BASE, ref), hash = abs.indexOf('#');
+      var doc = hash < 0 ? abs : abs.slice(0, hash), frag = hash < 0 ? '' : abs.slice(hash + 1);
+      try { frag = decodeURIComponent(frag); } catch (e) {}
+      if (frag === '' || frag.charAt(0) === '/') {
+        var res = reg.resources.get(doc);
+        if (res === undefined) throw new SchemaProblem('The reference "' + ref + '" points outside this schema. External references aren\u2019t supported, so nothing is downloaded.');
+        var node = res, base = reg.base.get(res) || doc;
+        if (frag) {
+          var tokens = frag.slice(1).split('/');
+          for (var t = 0; t < tokens.length; t++) {
+            var tok = tokens[t].replace(/~1/g, '/').replace(/~0/g, '~');
+            if (Array.isArray(node) && /^(0|[1-9]\d*)$/.test(tok) && +tok < node.length) node = node[+tok];
+            else if (node !== null && typeof node === 'object' && !Array.isArray(node) && hasOwn(node, tok)) node = node[tok];
+            else throw new SchemaProblem('The reference "' + ref + '" points to nothing in this schema.');
+            if (node !== null && typeof node === 'object' && reg.base.has(node)) base = reg.base.get(node);
+          }
+        }
+        if (node !== null && typeof node === 'object' && !reg.base.has(node)) walk(node, base);
+        return { node: node, base: base };
+      }
+      var anchored = reg.anchors.get(doc + '#' + frag);
+      if (anchored === undefined) {
+        throw new SchemaProblem(reg.resources.has(doc) ? 'The reference "' + ref + '" names an anchor that isn\u2019t in this schema.' :
+          'The reference "' + ref + '" points outside this schema. External references aren\u2019t supported, so nothing is downloaded.');
+      }
+      return { node: anchored, base: reg.base.get(anchored) };
+    };
+    return reg;
+  }
+
+  // ---- Values and messages ----
+  function jsonEqual(a, b) {
+    if (a === b) return true;
+    if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+    return canonicalJson(a) === canonicalJson(b);
+  }
+  function codePointLength(s) {
+    var n = 0;
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length && (s.charCodeAt(i + 1) & 0xfc00) === 0xdc00) i++;
+      n++;
+    }
+    return n;
+  }
+  // Exact decimal check for multipleOf: 0.3 is a multiple of 0.1, as written.
+  function decimalParts(x) {
+    var m = /^(-?)(\d+)(?:\.(\d+))?(?:e([-+]?\d+))?$/i.exec(String(x));
+    if (!m) return null;
+    var digits = (m[2] + (m[3] || '')).replace(/^0+(?=\d)/, ''), exp = (m[4] ? +m[4] : 0) - (m[3] ? m[3].length : 0);
+    return { digits: BigInt(digits), exp: exp };
+  }
+  function isMultipleOf(v, m) {
+    if (!isFinite(v) || !isFinite(m) || m <= 0) return false;
+    var a = decimalParts(Math.abs(v)), b = decimalParts(m);
+    if (!a || !b) return Math.abs(v / m - Math.round(v / m)) < 1e-9;
+    if (a.digits === BigInt(0)) return true;
+    var e = Math.min(a.exp, b.exp);
+    var A = a.digits * BigInt(10) ** BigInt(a.exp - e), B = b.digits * BigInt(10) ** BigInt(b.exp - e);
+    return A % B === BigInt(0);
+  }
+  function typeName(v) {
+    var t = jsonType(v);
+    return t === 'number' && Number.isInteger(v) ? 'integer' : t;
+  }
+  var A_TYPE = { string: 'a string', number: 'a number', integer: 'an integer', boolean: 'a boolean', object: 'an object', array: 'an array', null: 'null' };
+  function describeTypes(list) {
+    var words = list.map(function (t) { return A_TYPE[t] || t; });
+    return words.length <= 1 ? words.join('') : words.slice(0, -1).join(', ') + ' or ' + words[words.length - 1];
+  }
+  function gotText(v) {
+    var t = jsonType(v);
+    if (t === 'number') return Number.isInteger(v) ? 'a number (' + v + ')' : 'a number with a fraction (' + v + ')';
+    return A_TYPE[t];
+  }
+  function shortJson(v) { return previewValue(v, 40); }
+  function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+  var FORMAT_NAMES = { 'date-time': 'date and time (RFC 3339)', date: 'date (YYYY-MM-DD)', time: 'time (RFC 3339)', email: 'email address', uri: 'URI',
+    uuid: 'UUID', ipv4: 'IPv4 address', ipv6: 'IPv6 address', hostname: 'host name', regex: 'regular expression' };
+
+  // ---- format (checked only when asked: by default it is a note, as the spec says) ----
+  function daysIn(y, m) { return [31, (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0 ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]; }
+  function validDate(s) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+    return !!m && +m[2] >= 1 && +m[2] <= 12 && +m[3] >= 1 && +m[3] <= daysIn(+m[1], +m[2]);
+  }
+  function validTime(s) {
+    var m = /^(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:([Zz])|([+-])(\d{2}):(\d{2}))$/.exec(s);
+    if (!m) return false;
+    var h = +m[1], mi = +m[2], sec = +m[3];
+    if (h > 23 || mi > 59 || sec > 60) return false;
+    if (!m[4] && (+m[6] > 23 || +m[7] > 59)) return false;
+    if (sec === 60) {
+      // A leap second is only 23:59:60 in UTC.
+      var off = m[4] ? 0 : (m[5] === '+' ? 1 : -1) * (+m[6] * 60 + +m[7]);
+      var utc = ((h * 60 + mi - off) % 1440 + 1440) % 1440;
+      if (utc !== 23 * 60 + 59) return false;
+    }
+    return true;
+  }
+  function validIpv4(s) {
+    var parts = s.split('.');
+    return parts.length === 4 && parts.every(function (p) { return /^(0|[1-9]\d{0,2})$/.test(p) && +p <= 255; });
+  }
+  function validIpv6(s) {
+    var tail = /^(.*:)(\d+\.\d+\.\d+\.\d+)$/.exec(s);
+    if (tail) {
+      if (!validIpv4(tail[2])) return false;
+      s = tail[1] + '0:0';   // an IPv4 address at the end counts as two groups
+    }
+    if (!/^[0-9a-fA-F:]+$/.test(s)) return false;
+    var hex = /^[0-9a-fA-F]{1,4}$/, halves = s.split('::');
+    var groups = function (x) { return x === '' ? [] : x.split(':'); };
+    if (halves.length > 2) return false;
+    if (halves.length === 2) {
+      var l = groups(halves[0]), r = groups(halves[1]);
+      return l.concat(r).every(function (g) { return hex.test(g); }) && l.length + r.length <= 7;
+    }
+    var all = s.split(':');
+    return all.length === 8 && all.every(function (g) { return hex.test(g); });
+  }
+  function validHostname(s) {
+    if (!s || s.length > 253) return false;
+    var labels = s.split('.');
+    return labels.every(function (l) { return /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(l) && !/^..--/.test(l) || /^xn--[A-Za-z0-9-]{1,59}$/.test(l); });
+  }
+  function validEmail(s) {
+    var at = s.lastIndexOf('@');
+    if (at < 1) return false;
+    var local = s.slice(0, at), domain = s.slice(at + 1);
+    var atom = /^[A-Za-z0-9!#$%&'*+\/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+\/=?^_`{|}~-]+)*$/;
+    var quoted = /^"(?:[\x20\x21\x23-\x5b\x5d-\x7e]|\\[\x20-\x7e])*"$/;
+    if (!atom.test(local) && !quoted.test(local)) return false;
+    var lit = /^\[(.*)\]$/.exec(domain);
+    if (lit) return /^IPv6:/i.test(lit[1]) ? validIpv6(lit[1].slice(5)) : validIpv4(lit[1]);
+    return validHostname(domain);
+  }
+  var URI_RE = /^[A-Za-z][A-Za-z0-9+.-]*:(?:\/\/(?:(?:[A-Za-z0-9\-._~!$&'()*+,;=:]|%[0-9A-Fa-f]{2})*@)?(?:\[[0-9A-Fa-f:.]+\]|(?:[A-Za-z0-9\-._~!$&'()*+,;=]|%[0-9A-Fa-f]{2})*)(?::\d*)?(?:\/(?:[A-Za-z0-9\-._~!$&'()*+,;=:@]|%[0-9A-Fa-f]{2})*)*|(?:\/?(?:[A-Za-z0-9\-._~!$&'()*+,;=:@]|%[0-9A-Fa-f]{2})+(?:\/(?:[A-Za-z0-9\-._~!$&'()*+,;=:@]|%[0-9A-Fa-f]{2})*)*)?|\/)(?:\?(?:[A-Za-z0-9\-._~!$&'()*+,;=:@\/?]|%[0-9A-Fa-f]{2})*)?(?:#(?:[A-Za-z0-9\-._~!$&'()*+,;=:@\/?]|%[0-9A-Fa-f]{2})*)?$/;
+  function validUri(s) {
+    if (!URI_RE.test(s)) return false;
+    var auth = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/(?:[^@\/?#]*@)?(\[[^\]]*\])/.exec(s);
+    return !auth || validIpv6(auth[1].slice(1, -1));
+  }
+  var FORMAT_CHECKS = {
+    'date-time': function (s) { var m = /^(\d{4}-\d{2}-\d{2})[Tt](.*)$/.exec(s); return !!m && validDate(m[1]) && validTime(m[2]); },
+    date: validDate,
+    time: validTime,
+    email: validEmail,
+    uri: validUri,
+    uuid: function (s) { return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(s); },
+    ipv4: validIpv4,
+    ipv6: validIpv6,
+    hostname: validHostname,
+    regex: function (s) { try { new RegExp(s, 'u'); return true; } catch (e) { return false; } }
+  };
+
+  /*
+   * Validates a value against a schema. options:
+   *   formats: true to check the common formats (date-time, date, time, email, uri, uuid,
+   *     ipv4, ipv6, hostname, regex); otherwise "format" is only a note
+   *   draft: '2020-12' (default) or '07', used when the schema has no $schema
+   *   schemas: { uri: schema } more documents that references may point to (in memory)
+   *   deadline: a Date.now() time to stop at (the result then has timedOut)
+   *   maxErrors: most errors to collect (default 1000)
+   * Returns { valid, errors: [{ path, keyword, schemaPath, message }], truncated, draft,
+   * named, note } or { schemaError } when the schema itself is broken (or { timedOut }).
+   * Errors in anyOf / oneOf show the closest option's errors rather than every option's.
+   */
+  function validateSchema(value, schema, options) {
+    var o = options || {};
+    if (schema !== true && schema !== false && (schema === null || typeof schema !== 'object' || Array.isArray(schema))) {
+      return { schemaError: 'A schema must be an object (or true or false).' };
+    }
+    var dialect = schemaDialect(schema, o.draft), draft = dialect.draft, is07 = draft === '07';
+    var reg = schemaRegistry(draft);
+    try {
+      if (o.schemas) for (var uri in o.schemas) if (hasOwn(o.schemas, uri)) reg.add(o.schemas[uri], normalUri(uri));
+      reg.add(schema, SCHEMA_BASE);
+    } catch (e) { return { schemaError: e.schemaError || String(e && e.message || e) }; }
+    var formats = !!o.formats, deadline = o.deadline || 0, maxErrors = o.maxErrors || 1000;
+    var calls = 0, truncated = false, scope = [], regexes = new Map(), keepAll = reg.unevaluated;
+
+    function regex(src, where) {
+      var re = regexes.get(src);
+      if (re === undefined) {
+        try { re = new RegExp(src, 'u'); } catch (e) { throw new SchemaProblem('The pattern ' + JSON.stringify(src) + ' at ' + where + ' isn\u2019t a valid regular expression.'); }
+        regexes.set(src, re);
+      }
+      return re;
+    }
+    function pathOf(p) { var out = []; for (; p; p = p.up) out.push(p.key); return out.reverse(); }
+    function depthOf(p) { var n = 0; for (; p; p = p.up) n++; return n; }
+    function err(p, keyword, kp, message) { return { path: p, keyword: keyword, schemaPath: kp + '/' + pointerToken(keyword), message: message }; }
+    function child(p, key) { return { up: p, key: key }; }
+    function addAll(list, more) {
+      for (var i = 0; i < more.length; i++) {
+        if (list.length >= maxErrors) { truncated = true; return; }
+        list.push(more[i]);
+      }
+    }
+    function mergeSet(a, b) {
+      if (a === true || b === true) return true;
+      if (!b) return a;
+      if (!a) return new Set(b);
+      b.forEach(function (x) { a.add(x); });
+      return a;
+    }
+
+    // Checks value v (at path p) against schema node (at schema location kp).
+    // Returns { ok, errs, props, items }: props and items are what this schema evaluated
+    // (for unevaluatedProperties / unevaluatedItems): null, a Set, or true for all.
+    function check(node, v, p, kp) {
+      if ((++calls & 1023) === 0 && deadline && Date.now() > deadline) throw TIMED_OUT;
+      if (node === true) return { ok: true, errs: [], props: null, items: null };
+      if (node === false) return { ok: false, errs: [err(p, 'false', kp.replace(/\/[^/]*$/, ''), 'No value is allowed here')], props: null, items: null };
+      if (node === null || typeof node !== 'object' || Array.isArray(node)) return { ok: true, errs: [], props: null, items: null };
+      var base = reg.base.get(node), pushed = false;
+      if (base !== undefined && base !== scope[scope.length - 1]) { scope.push(base); pushed = true; }
+      try { return keywords(node, v, p, kp); } finally { if (pushed) scope.pop(); }
+    }
+
+    // Applies a subschema. Only subschemas applied to this same value (in place: $ref, allOf,
+    // if/then, dependentSchemas...) add to what it evaluated; child values have their own.
+    function sub(node, v, p, kp, out, child) {
+      var r = check(node, v, p, kp);
+      if (!r.ok) { out.ok = false; addAll(out.errs, r.errs); }
+      else if (!child) { out.props = mergeSet(out.props, r.props); out.items = mergeSet(out.items, r.items); }
+      return r;
+    }
+
+    function keywords(s, v, p, kp) {
+      var out = { ok: true, errs: [], props: null, items: null }, k, i, r;
+      var fail = function (keyword, message, at) { out.ok = false; addAll(out.errs, [err(at || p, keyword, kp, message)]); };
+      var t = jsonType(v);
+
+      if (hasOwn(s, '$ref')) {
+        var target = reg.resolve(s.$ref, s);
+        sub(target.node, v, p, kp + '/$ref', out);
+        if (is07) return out;   // draft-07: $ref replaces the rest of the schema
+      }
+      if (!is07 && hasOwn(s, '$dynamicRef')) {
+        var dref = s.$dynamicRef, first = reg.resolve(dref, s), node = first.node;
+        var name = dref.indexOf('#') >= 0 ? dref.slice(dref.indexOf('#') + 1) : '';
+        if (name && !/^\//.test(name) && node && typeof node === 'object' && node.$dynamicAnchor === name) {
+          for (i = 0; i < scope.length; i++) {
+            var dyn = reg.dynamic.get(scope[i]);
+            if (dyn && dyn.has(name)) { node = dyn.get(name); break; }
+          }
+        }
+        sub(node, v, p, kp + '/$dynamicRef', out);
+      }
+
+      // Any type
+      if (hasOwn(s, 'type')) {
+        var types = Array.isArray(s.type) ? s.type : [s.type], tn = typeName(v), okType = false;
+        for (i = 0; i < types.length; i++) if (types[i] === t || (types[i] === 'number' && t === 'number') || (types[i] === 'integer' && tn === 'integer')) okType = true;
+        if (!okType) fail('type', 'Expected ' + describeTypes(types) + ', got ' + gotText(v));
+      }
+      if (hasOwn(s, 'enum') && Array.isArray(s.enum)) {
+        var found = false;
+        for (i = 0; i < s.enum.length && !found; i++) found = jsonEqual(v, s.enum[i]);
+        if (!found) fail('enum', s.enum.length <= 6 ? 'Must be one of: ' + s.enum.map(shortJson).join(', ') : 'Must be one of the ' + s.enum.length + ' allowed values');
+      }
+      if (hasOwn(s, 'const') && !jsonEqual(v, s.const)) fail('const', 'Must be exactly ' + shortJson(s.const));
+
+      // Numbers
+      if (t === 'number') {
+        if (typeof s.multipleOf === 'number' && !isMultipleOf(v, s.multipleOf)) fail('multipleOf', 'Must be a multiple of ' + s.multipleOf);
+        if (typeof s.maximum === 'number' && v > s.maximum) fail('maximum', 'Must be at most ' + s.maximum);
+        if (typeof s.exclusiveMaximum === 'number' && v >= s.exclusiveMaximum) fail('exclusiveMaximum', 'Must be less than ' + s.exclusiveMaximum);
+        if (typeof s.minimum === 'number' && v < s.minimum) fail('minimum', 'Must be at least ' + s.minimum);
+        if (typeof s.exclusiveMinimum === 'number' && v <= s.exclusiveMinimum) fail('exclusiveMinimum', 'Must be greater than ' + s.exclusiveMinimum);
+      }
+
+      // Strings
+      if (t === 'string') {
+        if (typeof s.maxLength === 'number' || typeof s.minLength === 'number') {
+          var len = codePointLength(v);
+          if (typeof s.maxLength === 'number' && len > s.maxLength) fail('maxLength', 'Must have at most ' + plural(s.maxLength, 'character', 'characters') + ' (has ' + len + ')');
+          if (typeof s.minLength === 'number' && len < s.minLength) fail('minLength', 'Must have at least ' + plural(s.minLength, 'character', 'characters') + ' (has ' + len + ')');
+        }
+        if (typeof s.pattern === 'string' && !regex(s.pattern, kp + '/pattern').test(v)) fail('pattern', 'Must match the pattern ' + s.pattern);
+        if (formats && typeof s.format === 'string' && FORMAT_CHECKS[s.format] && !FORMAT_CHECKS[s.format](v)) {
+          fail('format', 'Must be a valid ' + FORMAT_NAMES[s.format]);
+        }
+      }
+
+      // Arrays
+      if (t === 'array') {
+        var n = v.length, prefix = 0;
+        if (!is07 && Array.isArray(s.prefixItems)) {
+          prefix = Math.min(n, s.prefixItems.length);
+          for (i = 0; i < prefix; i++) sub(s.prefixItems[i], v[i], child(p, i), kp + '/prefixItems/' + i, out, true);
+          if (prefix) out.items = mergeSet(out.items, new Set(range(prefix)));
+          prefix = s.prefixItems.length;
+        }
+        var itemsKw = hasOwn(s, 'items') ? s.items : undefined;
+        if (is07 && Array.isArray(itemsKw)) {
+          var m2 = Math.min(n, itemsKw.length);
+          for (i = 0; i < m2; i++) sub(itemsKw[i], v[i], child(p, i), kp + '/items/' + i, out, true);
+          if (hasOwn(s, 'additionalItems')) {
+            for (i = itemsKw.length; i < n; i++) {
+              if (s.additionalItems === false) { fail('additionalItems', 'No more than ' + plural(itemsKw.length, 'item is', 'items are') + ' allowed', child(p, i)); break; }
+              sub(s.additionalItems, v[i], child(p, i), kp + '/additionalItems', out, true);
+            }
+          }
+        } else if (itemsKw !== undefined) {
+          for (i = prefix; i < n; i++) {
+            if (itemsKw === false) { fail('items', prefix ? 'No more than ' + plural(prefix, 'item is', 'items are') + ' allowed' : 'Must be empty', child(p, i)); break; }
+            sub(itemsKw, v[i], child(p, i), kp + '/items', out, true);
+          }
+          if (n > prefix) out.items = true;
+        }
+        if (hasOwn(s, 'contains')) {
+          var matched = new Set();
+          for (i = 0; i < n; i++) if (check(s.contains, v[i], child(p, i), kp + '/contains').ok) matched.add(i);
+          var minC = !is07 && typeof s.minContains === 'number' ? s.minContains : 1;
+          var maxC = !is07 && typeof s.maxContains === 'number' ? s.maxContains : Infinity;
+          if (matched.size < minC) fail(minC === 1 && !hasOwn(s, 'minContains') ? 'contains' : 'minContains',
+            'Must contain at least ' + plural(minC, 'item', 'items') + ' matching the "contains" schema (has ' + matched.size + ')');
+          if (matched.size > maxC) fail('maxContains', 'Must contain at most ' + plural(maxC, 'item', 'items') + ' matching the "contains" schema (has ' + matched.size + ')');
+          if (!is07) out.items = mergeSet(out.items, matched);
+        }
+        if (typeof s.maxItems === 'number' && n > s.maxItems) fail('maxItems', 'Must have at most ' + plural(s.maxItems, 'item', 'items') + ' (has ' + n + ')');
+        if (typeof s.minItems === 'number' && n < s.minItems) fail('minItems', 'Must have at least ' + plural(s.minItems, 'item', 'items') + ' (has ' + n + ')');
+        if (s.uniqueItems === true) {
+          var seen = new Map();
+          for (i = 0; i < n; i++) {
+            var c = canonicalJson(v[i]);
+            if (seen.has(c)) { fail('uniqueItems', 'Items must be unique; items ' + seen.get(c) + ' and ' + i + ' are the same'); break; }
+            seen.set(c, i);
+          }
+        }
+      }
+
+      // Objects
+      if (t === 'object') {
+        var keys = Object.keys(v), props = s.properties, pats = s.patternProperties, covered = new Set();
+        if (props !== null && typeof props === 'object' && hasOwn(s, 'properties')) {
+          for (i = 0; i < keys.length; i++) if (hasOwn(props, keys[i])) { covered.add(keys[i]); sub(props[keys[i]], v[keys[i]], child(p, keys[i]), kp + '/properties/' + pointerToken(keys[i]), out, true); }
+        }
+        if (pats !== null && typeof pats === 'object' && hasOwn(s, 'patternProperties')) {
+          for (k in pats) {
+            if (!hasOwn(pats, k)) continue;
+            var re = regex(k, kp + '/patternProperties');
+            for (i = 0; i < keys.length; i++) if (re.test(keys[i])) { covered.add(keys[i]); sub(pats[k], v[keys[i]], child(p, keys[i]), kp + '/patternProperties/' + pointerToken(k), out, true); }
+          }
+        }
+        if (hasOwn(s, 'additionalProperties')) {
+          for (i = 0; i < keys.length; i++) {
+            if (covered.has(keys[i])) continue;
+            if (s.additionalProperties === false) fail('additionalProperties', 'Key ' + JSON.stringify(keys[i]) + ' is not allowed', child(p, keys[i]));
+            else sub(s.additionalProperties, v[keys[i]], child(p, keys[i]), kp + '/additionalProperties', out, true);
+            covered.add(keys[i]);
+          }
+        }
+        if (covered.size) out.props = mergeSet(out.props, covered);
+        if (hasOwn(s, 'propertyNames')) {
+          for (i = 0; i < keys.length; i++) {
+            r = check(s.propertyNames, keys[i], p, kp + '/propertyNames');
+            if (!r.ok) {
+              out.ok = false;
+              addAll(out.errs, r.errs.map(function (e) { return { path: p, keyword: e.keyword, schemaPath: e.schemaPath, message: 'Key ' + JSON.stringify(keys[i]) + ': ' + e.message.charAt(0).toLowerCase() + e.message.slice(1) }; }));
+            }
+          }
+        }
+        if (Array.isArray(s.required)) {
+          for (i = 0; i < s.required.length; i++) if (!hasOwn(v, s.required[i])) fail('required', 'Missing required key ' + s.required[i]);
+        }
+        if (typeof s.maxProperties === 'number' && keys.length > s.maxProperties) fail('maxProperties', 'Must have at most ' + plural(s.maxProperties, 'key', 'keys') + ' (has ' + keys.length + ')');
+        if (typeof s.minProperties === 'number' && keys.length < s.minProperties) fail('minProperties', 'Must have at least ' + plural(s.minProperties, 'key', 'keys') + ' (has ' + keys.length + ')');
+        var depReq = !is07 ? s.dependentRequired : null, depSch = !is07 ? s.dependentSchemas : null;
+        if (is07 && s.dependencies !== null && typeof s.dependencies === 'object') {
+          depReq = {}; depSch = {};
+          for (k in s.dependencies) if (hasOwn(s.dependencies, k)) { if (Array.isArray(s.dependencies[k])) depReq[k] = s.dependencies[k]; else depSch[k] = s.dependencies[k]; }
+        }
+        if (depReq !== null && typeof depReq === 'object') {
+          for (k in depReq) {
+            if (!hasOwn(depReq, k) || !hasOwn(v, k) || !Array.isArray(depReq[k])) continue;
+            for (i = 0; i < depReq[k].length; i++) if (!hasOwn(v, depReq[k][i])) fail(is07 ? 'dependencies' : 'dependentRequired', 'Key ' + k + ' requires key ' + depReq[k][i]);
+          }
+        }
+        if (depSch !== null && typeof depSch === 'object') {
+          for (k in depSch) if (hasOwn(depSch, k) && hasOwn(v, k)) sub(depSch[k], v, p, kp + (is07 ? '/dependencies/' : '/dependentSchemas/') + pointerToken(k), out);
+        }
+      }
+
+      // Combining schemas
+      if (Array.isArray(s.allOf)) for (i = 0; i < s.allOf.length; i++) sub(s.allOf[i], v, p, kp + '/allOf/' + i, out);
+      if (Array.isArray(s.anyOf)) {
+        var results = [], any = false;
+        for (i = 0; i < s.anyOf.length; i++) {
+          r = check(s.anyOf[i], v, p, kp + '/anyOf/' + i);
+          results.push(r);
+          if (r.ok) { any = true; out.props = mergeSet(out.props, r.props); out.items = mergeSet(out.items, r.items); if (!keepAll) break; }
+        }
+        if (!any) { out.ok = false; addAll(out.errs, closest('anyOf', results, p, kp, v)); }
+      }
+      if (Array.isArray(s.oneOf)) {
+        var oneResults = [], passing = [];
+        for (i = 0; i < s.oneOf.length; i++) {
+          r = check(s.oneOf[i], v, p, kp + '/oneOf/' + i);
+          oneResults.push(r);
+          if (r.ok) passing.push(i);
+        }
+        if (passing.length === 1) { out.props = mergeSet(out.props, oneResults[passing[0]].props); out.items = mergeSet(out.items, oneResults[passing[0]].items); }
+        else if (!passing.length) { out.ok = false; addAll(out.errs, closest('oneOf', oneResults, p, kp, v)); }
+        else fail('oneOf', 'Must match exactly one option of "oneOf", but matches options ' + passing.slice(0, -1).map(function (x) { return x + 1; }).join(', ') + ' and ' + (passing[passing.length - 1] + 1));
+      }
+      if (hasOwn(s, 'not') && check(s.not, v, p, kp + '/not').ok) fail('not', 'Must not match the schema in "not"');
+      if (hasOwn(s, 'if')) {
+        r = check(s['if'], v, p, kp + '/if');
+        if (r.ok) {
+          out.props = mergeSet(out.props, r.props); out.items = mergeSet(out.items, r.items);
+          if (hasOwn(s, 'then')) sub(s.then, v, p, kp + '/then', out);
+        } else if (hasOwn(s, 'else')) sub(s['else'], v, p, kp + '/else', out);
+      }
+
+      // Unevaluated (after everything else, which says what was evaluated)
+      if (!is07 && t === 'array' && hasOwn(s, 'unevaluatedItems')) {
+        if (out.items !== true) {
+          for (i = 0; i < v.length; i++) {
+            if (out.items && out.items.has(i)) continue;
+            if (s.unevaluatedItems === false) { fail('unevaluatedItems', 'Item ' + i + ' is not allowed (no part of the schema covers it)', child(p, i)); continue; }
+            sub(s.unevaluatedItems, v[i], child(p, i), kp + '/unevaluatedItems', out, true);
+          }
+        }
+        out.items = true;
+      }
+      if (!is07 && t === 'object' && hasOwn(s, 'unevaluatedProperties')) {
+        if (out.props !== true) {
+          var ks = Object.keys(v);
+          for (i = 0; i < ks.length; i++) {
+            if (out.props && out.props.has(ks[i])) continue;
+            if (s.unevaluatedProperties === false) { fail('unevaluatedProperties', 'Key ' + JSON.stringify(ks[i]) + ' is not allowed (no part of the schema covers it)', child(p, ks[i])); continue; }
+            sub(s.unevaluatedProperties, v[ks[i]], child(p, ks[i]), kp + '/unevaluatedProperties', out, true);
+          }
+        }
+        out.props = true;
+      }
+      return out;
+    }
+
+    // anyOf / oneOf with no matching option: the errors of the option the value most likely
+    // meant (no wrong type at this level, then the fewest problems), not of every option.
+    function closest(keyword, results, p, kp, v) {
+      var depth = depthOf(p), best = -1, bestScore = Infinity, shallowOnly = true, types = [];
+      for (var i = 0; i < results.length; i++) {
+        var errs = results[i].errs, shallow = 0;
+        for (var k = 0; k < errs.length; k++) {
+          var d = depthOf(errs[k].path), kw = errs[k].keyword;
+          if ((d === depth && (kw === 'type' || kw === 'false' || kw === 'const' || kw === 'enum')) || (d === depth + 1 && (kw === 'const' || kw === 'enum'))) shallow++;
+        }
+        if (!(errs.length === 1 && errs[0].keyword === 'type' && depthOf(errs[0].path) === depth)) shallowOnly = false;
+        else types.push(errs[0].message.replace(/^Expected (.*), got .*$/, '$1'));
+        var score = shallow * 1000 + errs.length;
+        if (score < bestScore) { bestScore = score; best = i; }
+      }
+      if (shallowOnly && types.length) {
+        return [{ path: p, keyword: keyword, schemaPath: kp + '/' + keyword, message: 'Expected ' + types.join(' or ') + ', got ' + gotText(v) }];
+      }
+      var summary = { path: p, keyword: keyword, schemaPath: kp + '/' + keyword,
+        message: 'Doesn\u2019t match any option of "' + keyword + '"; the closest is option ' + (best + 1) + (results[best].errs.length ? ':' : '') };
+      return [summary].concat(results[best].errs.map(function (e) { return { path: e.path, keyword: e.keyword, schemaPath: e.schemaPath, message: e.message, within: keyword + ' option ' + (best + 1) }; }));
+    }
+
+    try {
+      var res = check(schema, value, null, '#');
+      return {
+        valid: res.ok, truncated: truncated, draft: draft, named: dialect.named, note: dialect.note,
+        errors: res.errs.map(function (e) { var x = { path: pathOf(e.path), keyword: e.keyword, schemaPath: e.schemaPath, message: e.message }; if (e.within) x.within = e.within; return x; })
+      };
+    } catch (e) {
+      if (e === TIMED_OUT) return { timedOut: true };
+      if (e instanceof SchemaProblem) return { schemaError: e.schemaError };
+      if (e instanceof RangeError && !isTooBig(e)) return { schemaError: 'The schema refers to itself without end (or the data is nested too deeply) to check.' };
+      throw e;
+    }
+  }
+  function range(n) { var out = []; for (var i = 0; i < n; i++) out.push(i); return out; }
+
+  // Groups errors that are the same problem in different places (same keyword, schema
+  // location and message): [{ message, keyword, schemaPath, within, count, paths (first
+  // 50), first (index into errors) }], in the order they first appear.
+  function groupSchemaErrors(errors) {
+    var groups = [], byKey = new Map();
+    for (var i = 0; i < errors.length; i++) {
+      var e = errors[i], key = e.keyword + '\u0000' + e.schemaPath + '\u0000' + e.message + '\u0000' + (e.within || '');
+      var g = byKey.get(key);
+      if (!g) {
+        g = { message: e.message, keyword: e.keyword, schemaPath: e.schemaPath, within: e.within || null, count: 0, paths: [], first: i };
+        byKey.set(key, g);
+        groups.push(g);
+      }
+      g.count++;
+      if (g.paths.length < 50) g.paths.push(e.path);
+    }
+    return groups;
+  }
+
+  // Line numbers (1-based) in valid JSON text for a list of paths (null where not found).
+  function linesOfPaths(text, paths) {
+    var want = new Map(), out = new Array(paths.length).fill(null), left = 0;
+    for (var i = 0; i < paths.length; i++) {
+      var ptr = formatPath(paths[i], 'pointer');
+      if (!want.has(ptr)) { want.set(ptr, []); left++; }
+      want.get(ptr).push(i);
+    }
+    if (!left) return out;
+    var offsets = [];
+    try {
+      walkJsonValues(text, function (parts, from, end, start) {
+        var list = want.get(formatPath(parts, 'pointer'));
+        if (list) { offsets.push([from, list]); want.delete(formatPath(parts, 'pointer')); left--; }
+        return left === 0;
+      });
+    } catch (e) { return out; }
+    offsets.sort(function (a, b) { return a[0] - b[0]; });
+    var line = 1, pos = 0;
+    for (var k = 0; k < offsets.length; k++) {
+      var at = offsets[k][0];
+      for (var nl = text.indexOf('\n', pos); nl !== -1 && nl < at; nl = text.indexOf('\n', nl + 1)) line++;
+      pos = at;
+      // walkJsonValues reports a member from its key; the line of "from" is the line shown
+      for (var j = 0; j < offsets[k][1].length; j++) out[offsets[k][1][j]] = line;
+    }
+    return out;
+  }
+
+  /*
+   * Checks JSON text against schema text, both parsed here. Returns { status: 'ok', valid,
+   * errors (each with line), groups, truncated, draft, named, note, dataSchema } where
+   * dataSchema describes the data's own "$schema" key (if any), or { status: 'invalid',
+   * side: 'data' | 'schema', error } or { status: 'schema-error', message } or
+   * { status: 'timeout' }.
+   */
+  function runSchemaCheck(dataText, schemaText, opts, parsedData) {
+    var o = opts || {};
+    var ps = parseInput(schemaText);
+    if (ps.status !== 'ok') return ps.status === 'invalid' ? { status: 'invalid', side: 'schema', error: ps.error } : { status: 'schema-error', message: ps.message };
+    var pd = parsedData || parseInput(dataText);
+    if (pd.status !== 'ok') return pd.status === 'invalid' ? { status: 'invalid', side: 'data', error: pd.error } : { status: 'schema-error', message: pd.message };
+    var r = validateSchema(pd.value, ps.value, { formats: o.formats, deadline: o.deadline, maxErrors: o.maxErrors || 5000, draft: o.draft });
+    if (r.timedOut) return { status: 'timeout' };
+    if (r.schemaError) return { status: 'schema-error', message: r.schemaError };
+    var v = pd.value, named = v !== null && typeof v === 'object' && !Array.isArray(v) && typeof v.$schema === 'string' ? v.$schema : null;
+    var lines = r.errors.length ? linesOfPaths(dataText, r.errors.slice(0, 2000).map(function (e) { return e.path; })) : [];
+    for (var i = 0; i < r.errors.length; i++) r.errors[i].line = i < lines.length ? lines[i] : null;
+    return { status: 'ok', valid: r.valid, errors: r.errors, groups: groupSchemaErrors(r.errors), truncated: r.truncated, draft: r.draft, named: r.named, note: r.note,
+      dataSchema: named ? { uri: named, draft: draftOfUri(named) } : null };
+  }
+
   // ---- Big texts: rows and virtual scrolling ----
   // The Code view draws only the rows on screen. A row is a line of the text, and lines
   // longer than ROW_CHARS are split into several rows so no row is too wide to draw.
@@ -2835,9 +3490,24 @@
       post(m.msg, m.transfer);
     }
 
+    // Schema checks: the data and the schema kept by version (texts are sent only when they
+    // changed). A deadline stops long checks; the page also ends the worker if a single
+    // slow pattern runs past the time limit.
+    var val = { dv: null, data: null, parsed: null, sv: null, schema: null };
+    function validate(msg) {
+      if (msg.data != null) { val.dv = msg.dv; val.data = msg.data; val.parsed = null; }
+      if (msg.schema != null) { val.sv = msg.sv; val.schema = msg.schema; }
+      if (val.dv !== msg.dv || val.sv !== msg.sv) { post({ type: 'need-text', id: msg.id }); return; }
+      if (!val.parsed) val.parsed = parseInput(val.data);
+      var o = msg.opts || {};
+      var r = runSchemaCheck(val.data, val.schema, { formats: o.formats, maxErrors: o.maxErrors, deadline: o.limitMs ? Date.now() + o.limitMs : 0 }, val.parsed);
+      post({ type: 'validate', id: msg.id, result: r });
+    }
+
     return function handle(msg) {
       try {
         switch (msg.type) {
+          case 'validate': validate(msg); break;
           case 'diff': diff(msg); break;
           case 'diffView': {
             var dv = diffViewText(cmp.result.view, msg.context, cmp.result.changes.length);
@@ -2960,7 +3630,15 @@
     diffSummary: diffSummary,
     diffAsText: diffAsText,
     diffList: diffList,
-    runDiff: runDiff
+    runDiff: runDiff,
+    schemaDialect: schemaDialect,
+    draftOfUri: draftOfUri,
+    validateSchema: validateSchema,
+    groupSchemaErrors: groupSchemaErrors,
+    linesOfPaths: linesOfPaths,
+    runSchemaCheck: runSchemaCheck,
+    isMultipleOf: isMultipleOf,
+    codePointLength: codePointLength
   };
 
   // Also loadable from Node for the unit tests (no effect in the browser).
