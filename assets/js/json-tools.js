@@ -1318,12 +1318,27 @@
       var props = new Map(), keys = Object.keys(v);
       for (var k = 0; k < keys.length; k++) props.set(keys[k], { t: tsInfer(v[keys[k]]), count: 1 });
       t.obj = { count: 1, props: props };
-    } else t.prims.push(typeof v);   // string, number or boolean
+    } else {
+      t.prims.push(typeof v);   // string, number or boolean
+      // Also noted for generated JSON Schemas: whether numbers have fractions, and a few
+      // string values (for enums).
+      if (typeof v === 'number') t.frac = !Number.isInteger(v);
+      if (typeof v === 'string') t.strs = v.length <= 40 ? { values: new Map([[v, 1]]), total: 1, over: false } : { values: null, total: 1, over: true };
+    }
     return t;
+  }
+  var ENUM_MAX = 12;
+  function mergeStrs(a, b) {
+    if (!a) return b || null;
+    if (!b) return a;
+    if (a.over || b.over) return { values: null, total: a.total + b.total, over: true };
+    var values = new Map(a.values);
+    b.values.forEach(function (n, v) { values.set(v, (values.get(v) || 0) + n); });
+    return values.size > ENUM_MAX ? { values: null, total: a.total + b.total, over: true } : { values: values, total: a.total + b.total, over: false };
   }
 
   function tsMerge(a, b) {
-    var t = { prims: a.prims.slice(), obj: a.obj, arr: a.arr };
+    var t = { prims: a.prims.slice(), obj: a.obj, arr: a.arr, frac: !!(a.frac || b.frac), strs: mergeStrs(a.strs, b.strs) };
     b.prims.forEach(function (p) { if (t.prims.indexOf(p) === -1) t.prims.push(p); });
     if (b.arr) t.arr = a.arr ? { item: tsMerge(a.arr.item, b.arr.item) } : b.arr;
     if (b.obj) {
@@ -2224,6 +2239,95 @@
     } catch (e) {
       return failure(e);
     }
+  }
+
+  // ---- Generating a JSON Schema from data ----
+  // Uses the type inference of the TypeScript converter (tsInfer): keys present in every
+  // object of an array are required, the others optional; mixed values allow several types;
+  // shapes that repeat become $defs (built from all their occurrences); "integer" when
+  // every number seen was whole; and an enum only when a few short strings clearly repeat.
+
+  function generateSchema(value) {
+    var root = tsInfer(value), memo = new Map();
+    var shapes = new Map();   // signature -> { count, objs: [obj types] }
+    var objSig = function (obj) { return tsSignature({ prims: [], obj: obj, arr: null }, memo); };
+    (function count(t) {
+      if (t.obj && t.obj.props.size) {
+        var sig = objSig(t.obj), sh = shapes.get(sig);
+        if (!sh) shapes.set(sig, sh = { count: 0, objs: [], name: null, built: false });
+        sh.count++;
+        sh.objs.push(t.obj);
+        t.obj.props.forEach(function (p) { count(p.t); });
+      }
+      if (t.arr) count(t.arr.item);
+    })(root);
+
+    var defs = {}, used = new Set(), hasDefs = false;
+    function defName(hint, parent) {
+      var base = tsPascal(hint) || 'Item', name = base;
+      if (used.has(name)) name = parent + base;
+      for (var n = 2; used.has(name); n++) name = parent + base + n;
+      used.add(name);
+      return name;
+    }
+    function enumOf(t) {
+      var s = t.strs;
+      if (!s || s.over || !s.values || s.values.size < 2 || s.values.size > 6 || s.total < 4 || s.values.size * 2 > s.total) return null;
+      return Array.from(s.values.keys());
+    }
+    function objectSchema(obj, hint, parent, top) {
+      if (!obj.props.size) return { type: 'object' };
+      var sig = objSig(obj), sh = shapes.get(sig);
+      if (!top && sh && sh.count > 1) {
+        if (!sh.name) {
+          sh.name = defName(hint, parent);
+          hasDefs = true;
+          // One definition for every occurrence: their types merged.
+          var merged = { prims: [], obj: sh.objs[0], arr: null };
+          for (var i = 1; i < sh.objs.length; i++) merged = tsMerge(merged, { prims: [], obj: sh.objs[i], arr: null });
+          defs[sh.name] = {};
+          defs[sh.name] = buildObject(merged.obj, sh.name);
+        }
+        return { $ref: '#/$defs/' + pointerToken(sh.name) };
+      }
+      return buildObject(obj, parent);
+    }
+    function buildObject(obj, name) {
+      var out = { type: 'object', properties: {} }, required = [];
+      obj.props.forEach(function (p, k) {
+        setKey(out.properties, k, build(p.t, k, name));
+        if (p.count === obj.count) required.push(k);
+      });
+      if (required.length) out.required = required;
+      return out;
+    }
+    function build(t, hint, parent, top) {
+      var options = [], prims = [];
+      t.prims.forEach(function (p) { prims.push(p === 'number' ? (t.frac ? 'number' : 'integer') : p); });
+      if (t.obj) options.push(objectSchema(t.obj, hint, parent, top));
+      if (t.arr) {
+        var single = tsSingular(hint);
+        var item = t.arr.item.prims.length || t.arr.item.obj || t.arr.item.arr ? build(t.arr.item, single === hint ? hint + 'Item' : single, parent) : null;
+        options.push(item ? { type: 'array', items: item } : { type: 'array' });
+      }
+      if (prims.length) {
+        var ps = { type: prims.length === 1 ? prims[0] : prims };
+        var en = prims.length === 1 && prims[0] === 'string' ? enumOf(t) : null;
+        if (en) ps['enum'] = en;
+        options.push(ps);
+      }
+      if (!options.length) return {};
+      if (options.length === 1) return options[0];
+      // Simple types together become one "type" list; objects and arrays need anyOf.
+      if (options.every(function (o) { return typeof o.type === 'string' && Object.keys(o).length === 1 || Array.isArray(o.type) && Object.keys(o).length === 1; })) {
+        return { type: options.reduce(function (all, o) { return all.concat(o.type); }, []) };
+      }
+      return { anyOf: options };
+    }
+    var body = build(root, 'root', 'Root', true), schema = { $schema: 'https://json-schema.org/draft/2020-12/schema' };
+    for (var k in body) if (hasOwn(body, k)) setKey(schema, k, body[k]);
+    if (hasDefs) schema.$defs = defs;
+    return schema;
   }
 
   // ---- JSON Schema ----
@@ -3508,6 +3612,7 @@
       try {
         switch (msg.type) {
           case 'validate': validate(msg); break;
+          case 'generateSchema': post({ type: 'generateSchema', id: msg.id, schema: generateSchema(JSON.parse(msg.text)) }); break;
           case 'diff': diff(msg); break;
           case 'diffView': {
             var dv = diffViewText(cmp.result.view, msg.context, cmp.result.changes.length);
@@ -3637,6 +3742,7 @@
     groupSchemaErrors: groupSchemaErrors,
     linesOfPaths: linesOfPaths,
     runSchemaCheck: runSchemaCheck,
+    generateSchema: generateSchema,
     isMultipleOf: isMultipleOf,
     codePointLength: codePointLength
   };

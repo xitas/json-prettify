@@ -207,5 +207,73 @@ describe('createWorkerHandler: schema checks', () => {
     assert.equal(h.last('validate').result.valid, true);
     h.handle({ type: 'validate', id: 'q3', dv: 2, sv: 2, opts: {} });
     assert.deepEqual(h.last('need-text'), { type: 'need-text', id: 'q3' });
+    h.handle({ type: 'generateSchema', id: 'q4', text: '{"a": [1, 2]}' });
+    assert.deepEqual(h.last('generateSchema').schema.properties.a, { type: 'array', items: { type: 'integer' } });
+  });
+});
+
+// ---------- generating schemas ----------
+
+function random(seed) {
+  let s = seed >>> 0 || 1;
+  const next = () => (s = (Math.imul(s, 1103515245) + 12345) >>> 0) / 4294967296;
+  return { next, int: n => Math.floor(next() * n), pick: l => l[Math.floor(next() * l.length)], chance: p => next() < p };
+}
+const KEYS = ['id', 'name', 'a b', '', 'kéy', '__proto__', 'constructor', '10', 'status', 'list', 'nested', 'x/y', '$schema', '$ref'];
+const SCALARS = [0, 1, -1, 1.5, 1e21, 2e-7, '', 'text', 'paid', 'open', '😀', true, false, null];
+function value(r, depth) {
+  const x = r.next();
+  if (depth > 4 || x < 0.35) return r.pick(SCALARS);
+  if (x < 0.55) return Array.from({ length: r.int(6) }, () => value(r, depth + 1));
+  if (x < 0.75) return Array.from({ length: r.int(8) }, () => { const o = {}; if (r.chance(0.8)) o.id = r.int(5); if (r.chance(0.6)) o.status = r.pick(['paid', 'open', 'void']); if (r.chance(0.5)) o.v = value(r, depth + 2); return o; });
+  const o = {};
+  for (let i = r.int(5); i > 0; i--) Object.defineProperty(o, r.pick(KEYS), { value: value(r, depth + 1), enumerable: true, writable: true, configurable: true });
+  return o;
+}
+
+describe('generateSchema', () => {
+  test('required and optional keys, types, nested $defs for repeated shapes, sensible enums', () => {
+    const data = {
+      orders: [
+        { id: 1, status: 'paid', total: 9.5, ship: { city: 'K' } }, { id: 2, status: 'open', total: 3, ship: { city: 'L' }, note: null },
+        { id: 3, status: 'paid', total: 1, ship: { city: 'M' } }, { id: 4, status: 'open', total: 2, ship: { city: 'N' } }
+      ],
+      billing: { city: 'X' },
+      names: ['Amina', 'Bilal', 'Chen']
+    };
+    const s = T.generateSchema(data);
+    assert.equal(s.$schema, 'https://json-schema.org/draft/2020-12/schema');
+    const order = s.properties.orders.items;
+    assert.deepEqual(order.required, ['id', 'status', 'total', 'ship']);
+    assert.deepEqual(order.properties.id, { type: 'integer' });
+    assert.deepEqual(order.properties.total, { type: 'number' });
+    assert.deepEqual(order.properties.status, { type: 'string', enum: ['paid', 'open'] });
+    assert.deepEqual(order.properties.note, { type: 'null' });
+    assert.deepEqual(order.properties.ship, { $ref: '#/$defs/Ship' });
+    assert.deepEqual(s.properties.billing, { $ref: '#/$defs/Ship' });
+    assert.deepEqual(s.$defs.Ship, { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] });
+    assert.deepEqual(s.properties.names, { type: 'array', items: { type: 'string' } }, 'three different names are not an enum');
+    assert.equal(T.validateSchema(data, s).valid, true);
+  });
+
+  test('mixed values and empty arrays', () => {
+    assert.deepEqual(T.generateSchema([1, 'a', null]), { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'array', items: { type: ['integer', 'string', 'null'] } });
+    assert.deepEqual(T.generateSchema({ e: [] }).properties.e, { type: 'array' });
+    const mixed = T.generateSchema([{ a: 1 }, 'x']);
+    assert.ok(mixed.items.anyOf, JSON.stringify(mixed));
+  });
+
+  test('the TypeScript output is unchanged by the extra notes', () => {
+    assert.equal(T.toTypeScript({ a: [1, 2.5], b: 'x' }).text, 'export interface Root {\n  a: number[];\n  b: string;\n}\n');
+  });
+
+  test('fuzz: every schema made from 500 random documents accepts its document', () => {
+    const r = random(77);
+    for (let i = 0; i < 500; i++) {
+      const doc = value(r, 0);
+      const schema = T.generateSchema(doc);
+      const res = T.validateSchema(doc, JSON.parse(JSON.stringify(schema)));
+      assert.equal(res.valid, true, `doc ${JSON.stringify(doc)}\nschema ${JSON.stringify(schema)}\nerrors ${JSON.stringify(res.errors)}`);
+    }
   });
 });
