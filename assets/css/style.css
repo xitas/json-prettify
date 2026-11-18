@@ -673,6 +673,7 @@ textarea {
   overflow: auto;
 }
 .code-rows {
+  position: relative;
   display: flex;
   width: max-content;
   min-width: 100%;
@@ -683,6 +684,37 @@ pre {
 }
 pre code {
   font: inherit;
+}
+/* Virtual rows (code-view.js): .code-rows is as tall as all the rows, and only the rows
+   on screen exist. Each row is placed absolutely; <code> and the gutter numbers move
+   together with a transform. The rows overflow sideways (long lines scroll) but never
+   downwards, so rows kept far away for a selection do not change the scroll height. */
+.code-rows > pre {
+  position: relative;
+  padding: 0;
+  overflow-x: visible;
+  overflow-y: clip;
+}
+.code-rows code {
+  position: absolute;
+  top: 0;
+  left: var(--space-4);
+}
+.code-row {
+  position: absolute;
+  left: 0;
+  height: 24px;
+  white-space: pre;
+}
+.code-rows .gutter-track {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 0 var(--space-2) 0 var(--space-3);
+}
+.input-view {
+  flex: 1 1 auto;
 }
 
 textarea:focus-visible,
@@ -1085,7 +1117,7 @@ button.tree-copy .icon {
 }
 /* In a narrow pane, Copy and Download show only their icons (the text stays for screen
    readers). */
-@container pane (max-width: 560px) {
+@container pane (max-width: 600px) {
   .btn-collapse {
     width: var(--control-h-sm);
     padding: 0;
@@ -1394,6 +1426,7 @@ textarea::-webkit-scrollbar-thumb:hover,
 }
 .empty[data-kind="empty"] .icon-error,
 .empty[data-kind="info"] .icon-error,
+.empty[data-kind="stopped"] .icon-error,
 .empty[data-kind="error"] .icon-empty {
   display: none;
 }
@@ -1409,8 +1442,8 @@ textarea::-webkit-scrollbar-thumb:hover,
 /*
  * Syntax highlighting: color plus weight and style, so types stay distinct without color.
  * Punctuation is the only text left outside the token spans, so it takes the color of
- * the highlighted <code> itself (no extra spans). Output too large to highlight has no
- * .hl class and stays plain text.
+ * the highlighted <code> itself (no extra spans). The read-only input view has no .hl
+ * class and stays plain text.
  */
 pre code.hl {
   color: var(--json-punct);
@@ -1432,6 +1465,97 @@ pre code.hl {
 .z {
   color: var(--json-null);
   font-style: italic;
+}
+
+/* ---------- Large files: notes and progress ---------- */
+.input-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--fg);
+}
+.input-note-text {
+  flex: 1 1 220px;
+  margin: 0;
+}
+/* Progress for long jobs, over the top of the output, with Cancel. */
+.job-progress {
+  position: absolute;
+  top: var(--space-3);
+  left: 50%;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2) var(--space-3);
+  width: max-content;
+  max-width: calc(100% - 2 * var(--space-3));
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  transform: translateX(-50%);
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--card-shadow);
+}
+.job-time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.job-progress progress {
+  width: 96px;
+  height: 6px;
+  border: 0;
+  border-radius: 3px;
+  color: var(--fg);
+  background: var(--surface-3);
+  -webkit-appearance: none;
+  appearance: none;
+  overflow: hidden;
+}
+.job-progress progress::-webkit-progress-bar {
+  background: var(--surface-3);
+}
+.job-progress progress::-webkit-progress-value {
+  background: var(--fg);
+}
+.job-progress progress::-moz-progress-bar {
+  background: var(--fg);
+}
+/* Without a known amount, a short bar slides back and forth (it stays still with reduced motion). */
+.job-progress progress:not([value]) {
+  background: linear-gradient(90deg, var(--fg) 0 30%, var(--surface-3) 30% 100%) no-repeat;
+  background-size: 100% 100%;
+  animation: progress-slide 1.2s ease-in-out infinite alternate;
+}
+.job-progress progress:not([value])::-webkit-progress-bar {
+  background: transparent;
+}
+.job-progress progress:not([value])::-moz-progress-bar {
+  background: transparent;
+}
+@keyframes progress-slide {
+  from { background-position: -40px 0; }
+  to { background-position: 66px 0; }
+}
+/* While a job runs, the result underneath is out of date: dim it. */
+.pane-body[aria-busy="true"] > .code-scroll,
+.pane-body[aria-busy="true"] > .tree-view,
+.pane-body[aria-busy="true"] > .empty {
+  opacity: 0.45;
+}
+/* Dropping a file on the input pane */
+.pane.drop-target .pane-body {
+  outline: 2px dashed var(--fg);
+  outline-offset: -6px;
 }
 
 /* ---------- Footer ---------- */

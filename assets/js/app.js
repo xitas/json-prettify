@@ -6,8 +6,7 @@
   'use strict';
 
   var T = window.JsonTools;
-  var fmtBytes = T.fmtBytes, byteLen = T.byteLen, esc = T.esc, describeError = T.describeError;
-  var sortKeys = T.sortKeys, measure = T.measure, kindOf = T.kindOf, highlight = T.highlight;
+  var fmtBytes = T.fmtBytes, byteLen = T.byteLen, esc = T.esc;
 
   var $ = function (id) { return document.getElementById(id); };
   var input = $('input'), output = $('output'), outCode = $('outCode'), outTitle = $('outTitle');
@@ -16,12 +15,35 @@
   var statusEl = $('status'), indentSel = $('indent'), sortBox = $('sortKeys');
   var btnFormat = $('btnFormat'), btnMinify = $('btnMinify'), btnCopy = $('btnCopy'), btnUse = $('btnUse');
   var inGutter = $('inGutter'), inTrack = $('inGutterTrack'), inMark = $('inGutterMark');
-  var outGutter = $('outGutter'), outTrack = $('outGutterTrack');
+  var inputView = $('inputView'), inputNote = $('inputNote'), inputNoteText = $('inputNoteText'), btnEditLarge = $('btnEditLarge');
+
+  // The output's Code view and the read-only view for large inputs draw only the rows on
+  // screen (code-view.js).
+  var codeView = window.CodeView.create({
+    scroller: output, rows: output.querySelector('.code-rows'), pre: output.querySelector('pre'), code: outCode,
+    gutter: $('outGutter'), track: $('outGutterTrack')
+  });
+  var bigInputView = window.CodeView.create({
+    scroller: inputView, rows: inputView.querySelector('.code-rows'), pre: inputView.querySelector('pre'), code: $('inViewCode'),
+    gutter: $('inViewGutter'), track: $('inViewTrack'), lineMark: $('inViewMark')
+  });
+
+  /*
+   * Sizes, in characters. Inputs up to SYNC_CHARS are processed on the main thread as you
+   * type, exactly as before (it takes a few milliseconds). Bigger inputs are processed in a
+   * Web Worker, and typing no longer re-formats them on every pause: Format (Ctrl/Cmd +
+   * Enter) does. Above VIEW_ONLY_CHARS or VIEW_ONLY_LINES the input is shown read-only,
+   * because the browser's text box takes seconds to load text that big and is slow to type
+   * in; "Edit as text" still loads it there, up to EDIT_MAX_CHARS. Files over MAX_FILE_BYTES
+   * are not opened: the browser would run out of memory.
+   */
+  var SYNC_CHARS = 1000000, VIEW_ONLY_CHARS = 2000000, VIEW_ONLY_LINES = 50000, EDIT_MAX_CHARS = 10000000;
+  var MAX_FILE_BYTES = 256 * 1048576, PROGRESS_DELAY = 300;
 
   var mode = 'format';
   var lastOutput = '';
   var lastView = '';
-  var HIGHLIGHT_LIMIT = 400000;
+  var lastResultAsync = false;   // the output came from the worker (it can answer questions about it)
 
   var SAMPLE = '{"order":{"id":"ORD-20481","placedAt":"2026-11-04T09:42:17Z","status":"shipped","customer":{"name":"Amina Rauf","email":"amina@example.com","vip":true},"items":[{"sku":"KB-104","name":"Mechanical keyboard","qty":1,"price":89.5},{"sku":"MS-220","name":"Wireless mouse","qty":2,"price":24.99}],"shipping":{"method":"express","trackingNumber":null,"address":{"city":"Lahore","country":"PK","postalCode":"54000"}},"total":139.48,"notes":"Leave with reception \\"Block B\\""}}';
 
@@ -50,7 +72,8 @@
 
   function showEmpty(kind, title, text) {
     lastOutput = '';
-    outCode.textContent = '';
+    lastResultAsync = false;
+    codeView.clear();
     output.hidden = true;
     treeView.hidden = true;
     pathBar.hidden = true;
@@ -66,17 +89,15 @@
     btnShare.disabled = true;
     if (searchOpen) {
       searchGen++;
-      setHits([], false, null, kind === 'info' ? '' : input.value.trim() ? 'Fix the input to search it' : '');
+      setHits([], false, null, kind === 'info' || kind === 'stopped' ? '' : inputText().trim() ? 'Fix the input to search it' : '');
     }
   }
 
-  // Does all the formatting work before anything is drawn, so a failure (for example
-  // JSON.stringify running out of stack on very deep input) leaves nothing half-rendered.
   // Output formats. JSON gets the tree, path bar and JSON-aware search; the others are shown
-  // as text in the Code view.
+  // as text in the Code view. The conversions themselves are in json-tools.js (runJob).
   var FORMATS = {
     json: { label: 'JSON', mime: 'application/json' },
-    yaml: { label: 'YAML', mime: 'application/yaml', convert: function (v, indent) { return { text: T.toYaml(v, indent) }; }, tokens: T.yamlTokens }
+    yaml: { label: 'YAML', mime: 'application/yaml' }
   };
   var CSV_KEY = 'json-formatter-csv', csvOpts = { delimiter: ',', protect: true };
   try {
@@ -86,11 +107,7 @@
       if (typeof savedCsv.protect === 'boolean') csvOpts.protect = savedCsv.protect;
     }
   } catch (e) {}
-  FORMATS.csv = {
-    label: 'CSV', mime: 'text/csv;charset=utf-8', bom: true,
-    convert: function (v) { return T.toCsv(v, csvOpts); },
-    tokens: function (text) { return T.csvTokens(text, csvOpts.delimiter); }
-  };
+  FORMATS.csv = { label: 'CSV', mime: 'text/csv;charset=utf-8', bom: true };
   var TS_KEY = 'json-formatter-ts', tsOpts = { style: 'interface', rootName: 'Root' };
   try {
     var savedTs = JSON.parse(localStorage.getItem(TS_KEY) || 'null');
@@ -99,12 +116,8 @@
       if (typeof savedTs.rootName === 'string') tsOpts.rootName = savedTs.rootName.slice(0, 60);
     }
   } catch (e) {}
-  FORMATS.ts = {
-    // Plain text: some systems treat .ts as an MPEG video file.
-    label: 'TypeScript', mime: 'text/plain;charset=utf-8',
-    convert: function (v, indent) { return T.toTypeScript(v, { style: tsOpts.style, rootName: tsOpts.rootName, indent: indent }); },
-    tokens: T.tsTokens
-  };
+  // Plain text: some systems treat .ts as an MPEG video file.
+  FORMATS.ts = { label: 'TypeScript', mime: 'text/plain;charset=utf-8' };
   var outFormat = 'json';
   var FORMAT_KEY = 'json-formatter-format', outFormatSel = $('outFormat');
   try {
@@ -112,59 +125,36 @@
     if (FORMATS[savedFormat]) outFormat = outFormatSel.value = savedFormat;
   } catch (e) {}
 
-  function formatValue(value, inBytes) {
-    if (sortBox.checked) value = sortKeys(value);
-    var indent = indentSel.value === 'tab' ? '\t' : +indentSel.value;
-    var json = mode === 'minify' ? JSON.stringify(value) : JSON.stringify(value, null, indent);
-    var fmt = FORMATS[outFormat], result = json, tokens = null, unsupported = null;
-    if (fmt.convert) {
-      var converted = fmt.convert(value, indent);
-      if (converted.error) unsupported = converted.error;
-      result = converted.text || '';
-    }
-    var html = null;
-    if (result.length <= HIGHLIGHT_LIMIT) {
-      if (fmt.convert) { tokens = fmt.tokens(result); html = T.renderTokens(result, tokens, []); }
-      else html = highlight(result);
-    }
-    var outBytes = byteLen(result);
-    var meta = [fmtBytes(outBytes)];
-    if (mode === 'minify' && outFormat === 'json' && inBytes > 0) {
-      var saved = Math.round((1 - outBytes / inBytes) * 100);
-      meta = [fmtBytes(inBytes) + ' \u2192 ' + fmtBytes(outBytes)];
-      if (saved > 0) meta.push('\u2212' + saved + '%');
-    }
-    return { value: value, result: result, html: html, tokens: tokens, unsupported: unsupported, meta: meta, stats: measure(value) };
+  // Options for a job (see runJob in json-tools.js).
+  function jobOptions() {
+    return {
+      mode: mode, indent: indentSel.value === 'tab' ? '\t' : +indentSel.value, sort: sortBox.checked, format: outFormat,
+      csv: { delimiter: csvOpts.delimiter, protect: csvOpts.protect }, ts: { style: tsOpts.style, rootName: tsOpts.rootName }
+    };
   }
 
-  function isTooDeep(e) {
-    return (e && e.name === 'RangeError') || /recursion|call stack|nest/i.test(String(e && e.message));
-  }
-
-  function showFailure(e, value) {
-    var deep = isTooDeep(e);
-    var depth = null;
-    if (value !== undefined) {
-      try { depth = measure(value).depth; } catch (e2) {}
-    }
+  // r: a failed job ({ deep, tooBig, message, depth }).
+  function showFailure(r) {
     setStatus('invalid', 'Error',
-      deep ? 'This JSON is nested too deeply to format.' : 'Something went wrong while formatting this JSON.',
-      depth !== null ? ['depth ' + depth.toLocaleString('en-US')] : null);
-    showEmpty('error', 'Can\u2019t show a result', deep
-      ? 'The browser can\u2019t format JSON nested this deeply. Try formatting a smaller part of it.'
-      : (e && e.message ? e.message : 'Unknown error') + '.');
+      r.tooBig ? 'This JSON is too big for the browser to format.' :
+        r.deep ? 'This JSON is nested too deeply to format.' : 'Something went wrong while formatting this JSON.',
+      r.depth !== null && r.depth !== undefined ? ['depth ' + r.depth.toLocaleString('en-US')] : null);
+    showEmpty('error', 'Can\u2019t show a result', r.tooBig
+      ? 'The browser ran out of memory. Try a smaller file, or a browser on a computer with more memory.'
+      : r.deep ? 'The browser can\u2019t format JSON nested this deeply. Try formatting a smaller part of it.'
+        : (r.message || 'Unknown error') + '.');
   }
 
-  // ---- Line-number gutters ----
+  // ---- Line-number gutter of the input text box ----
   // The numbers are one string in a data attribute, shown with CSS generated content.
   // It is rebuilt only when the line count changes, never on every keystroke.
-  var gutterCount = { input: 0, output: 0 };
+  var gutterCount = 0;
 
-  function setGutterLines(which, gutter, track, count) {
-    if (gutterCount[which] === count) return;
-    gutterCount[which] = count;
-    track.setAttribute('data-lines', T.lineNumbers(count));
-    gutter.style.setProperty('--digits', T.gutterDigits(count));
+  function setInputGutterLines(count) {
+    if (gutterCount === count) return;
+    gutterCount = count;
+    inTrack.setAttribute('data-lines', T.lineNumbers(count));
+    inGutter.style.setProperty('--digits', T.gutterDigits(count));
   }
 
   // The textarea scrolls by itself (wheel, keys, touch, paste, caret moves); the gutter
@@ -174,12 +164,18 @@
   }
 
   function refreshInputGutter() {
-    setGutterLines('input', inGutter, inTrack, T.countLines(input.value));
+    if (bigText !== null) return;
+    setInputGutterLines(T.countLines(input.value));
     syncInputGutter();
   }
 
   // Highlights the number of the line with a syntax error (null clears it).
   function markErrorLine(line) {
+    if (bigText !== null) {
+      bigInputView.markLine(line);
+      inMark.hidden = true;
+      return;
+    }
     if (line) {
       inMark.textContent = line;
       inMark.style.setProperty('--mark-line', line);
@@ -189,94 +185,352 @@
     }
   }
 
-  function update() {
-    var text = input.value;
+  // ---- The input: the text box, or a read-only view for large texts ----
+  var bigText = null;                    // the input while it is shown read-only (else null)
+  var bigBytes = null;                   // its size in bytes
+  var textVersion = 0;                   // goes up whenever the input text changes
+  var editPaused = false;                // a large input was edited and not formatted since
+
+  function inputText() { return bigText !== null ? bigText : input.value; }
+  function hasText(text) { return /\S/.test(text); }   // without trimming a copy of a big text
+
+  function isBigText(text) {
+    return text.length > VIEW_ONLY_CHARS || (text.length > VIEW_ONLY_LINES && T.countLines(text) > VIEW_ONLY_LINES);
+  }
+
+  // Replaces the input. info.bytes: the file size, when it came from a file.
+  function setInputText(text, info) {
+    textVersion++;
+    editPaused = false;
+    if (isBigText(text)) {
+      var hadFocus = document.activeElement === input || document.activeElement === inputView;
+      bigText = text;
+      bigBytes = info && info.bytes !== undefined ? info.bytes : byteLen(text);
+      input.value = '';
+      input.hidden = true;
+      inGutter.hidden = true;
+      inMark.hidden = true;
+      inputView.hidden = false;
+      bigInputView.setText(text);
+      if (hadFocus) inputView.focus();
+    } else {
+      if (bigText !== null) {
+        bigText = null;
+        bigBytes = null;
+        inputView.hidden = true;
+        bigInputView.clear();
+        input.hidden = false;
+        inGutter.hidden = false;
+        gutterCount = -1;
+      }
+      input.value = text;
+    }
+    syncInputNote();
+  }
+
+  function syncInputNote() {
+    var msg = '';
+    if (bigText !== null) {
+      msg = 'Large file: shown read-only so the page stays responsive.';
+      btnEditLarge.hidden = bigText.length > EDIT_MAX_CHARS;
+    } else {
+      btnEditLarge.hidden = true;
+      if (editPaused) msg = 'Large file: press Format to update (Ctrl/Cmd + Enter).';
+    }
+    inputNoteText.textContent = msg;
+    inputNote.hidden = !msg;
+  }
+
+  function inputMeta(text) {
+    if (!text.length) return '';
+    if (bigText !== null) return badges([fmtBytes(bigBytes), plural(bigInputView.index().lines, 'line', 'lines')]);
+    return badges([fmtBytes(byteLen(text)), plural(T.countLines(text), 'line', 'lines')]);
+  }
+
+  // "Edit as text": move a large input into the text box (slow once, and slow to type in).
+  btnEditLarge.addEventListener('click', function () {
+    if (bigText === null) return;
+    var text = bigText;
+    showProgress('Loading the input into the text box\u2026', null, false);
+    setTimeout(function () {   // let the message draw first
+      bigText = null;
+      bigBytes = null;
+      inputView.hidden = true;
+      bigInputView.clear();
+      input.hidden = false;
+      inGutter.hidden = false;
+      gutterCount = -1;
+      input.value = text;
+      hideProgress();
+      refreshInputGutter();
+      syncInputNote();
+      input.focus();
+      input.setSelectionRange(0, 0);
+      input.scrollTop = 0;
+    }, 50);
+  });
+
+  // ---- Worker ----
+  // Inputs over SYNC_CHARS are processed in a Web Worker made from json-tools.js itself (a
+  // Blob URL, which also works when the page is opened from disk). Each job has an id; when
+  // a new one starts while another is still running, the old one is stopped (the worker is
+  // ended and a new one started), so a stale result never shows. Without workers, the same
+  // code runs on the main thread in slices (createWorkerHandler's sliced mode).
+  var jobs = T.createJobTracker();
+  var worker = null, workerFailed = false, workerAnswered = false, workerVersion = null, workerUrl = null;
+  var fallback = null;          // the handler on the main thread, when workers are not available
+  var running = null;           // { id, version, text, key, phase, size, started }
+  var shownKey = null;          // the job whose result is showing (version + options)
+  var replies = {}, requestId = 0, idleWaiters = [];
+
+  function workersOff() {
+    try { return localStorage.getItem('json-formatter-worker') === 'off'; } catch (e) { return false; }
+  }
+  function startWorker() {
+    if (worker || workerFailed) return worker;
+    try {
+      if (workersOff() || typeof Worker === 'undefined') throw new Error('off');
+      if (!workerUrl) workerUrl = URL.createObjectURL(new Blob([T.workerSource()], { type: 'text/javascript' }));
+      worker = new Worker(workerUrl);
+      worker.onmessage = function (e) { workerAnswered = true; onWorkerMessage(e.data); };
+      worker.onerror = function (e) { if (e && e.preventDefault) e.preventDefault(); onWorkerCrash(); };
+    } catch (e) {
+      workerFailed = true;
+      worker = null;
+    }
+    return worker;
+  }
+  function post(msg) {
+    var w = startWorker();
+    if (w) { w.postMessage(msg); return; }
+    if (!fallback) {
+      fallback = T.createWorkerHandler(function (m) { setTimeout(function () { onWorkerMessage(m); }, 0); }, { sliced: true });
+    }
+    fallback(msg);
+  }
+  // Ends the worker (stopping whatever it is doing) or, without one, the job in slices.
+  function stopWorker() {
+    if (worker) { worker.terminate(); worker = null; workerVersion = null; }
+    else if (fallback && running) fallback({ type: 'cancel', id: running.id });
+    var pending = replies;
+    replies = {};
+    for (var k in pending) pending[k]({ type: 'error', cancelled: true });
+  }
+  // Questions about the result showing (search, paths, values), answered by the worker.
+  function request(msg, done) {
+    var id = 'q' + (++requestId);
+    msg.id = id;
+    replies[id] = done;
+    post(msg);
+  }
+
+  function startJob(text, version) {
+    var opts = jobOptions(), key = version + '|' + JSON.stringify(opts);
+    if (running && running.key === key) return;            // already on its way
+    if (!running && shownKey === key && lastResultAsync) return;   // already showing
+    if (running) stopWorker();
+    var id = jobs.start();
+    running = { id: id, version: version, text: text, key: key, phase: 'parse', size: bigText !== null ? bigBytes : byteLen(text), started: Date.now() };
+    post({ type: 'job', id: id, version: version, text: workerVersion === version ? undefined : text, opts: opts });
+    workerVersion = version;
+    output.closest('.pane-body').setAttribute('aria-busy', 'true');
+    clearTimeout(progressTimer);
+    progressTimer = setTimeout(function () {
+      if (!running || running.id !== id) return;
+      // A job that takes a while: the status bar says so, instead of describing the old result.
+      setStatus('empty', 'Working', lastOutput ? 'The result below is out of date until this finishes.' : 'Working on the input…');
+      jobProgressTick();
+    }, PROGRESS_DELAY);
+  }
+
+  function onWorkerMessage(m) {
+    if (m.type === 'progress') {
+      if (running && m.id === running.id) { running.phase = m.phase; if (!jobProgress.hidden) jobProgressTick(); }
+      return;
+    }
+    if (m.type === 'need-text') {   // the worker restarted and lost the text: send it again
+      if (running && m.id === running.id) {
+        post({ type: 'job', id: running.id, version: running.version, text: running.text, opts: jobOptions() });
+        workerVersion = running.version;
+      }
+      return;
+    }
+    if (m.type === 'result') {
+      if (!running || !jobs.isCurrent(m.id) || m.id !== running.id) return;   // an older job: ignore
+      var key = running.key;
+      running = null;
+      hideProgress();
+      shownKey = key;
+      showJobResult(m, true);
+      var waiting = idleWaiters;
+      idleWaiters = [];
+      waiting.forEach(function (f) { f(); });
+      return;
+    }
+    var done = replies[m.id];
+    if (done) { delete replies[m.id]; done(m); }
+  }
+
+  // The worker stopped by itself: it could not start (some browsers or settings block
+  // workers), or it ran out of memory.
+  function onWorkerCrash() {
+    var job = running;
+    worker = null;
+    workerVersion = null;
+    var pending = replies;
+    replies = {};
+    for (var k in pending) pending[k]({ type: 'error', cancelled: true });
+    if (!workerAnswered) {
+      workerFailed = true;   // never worked here: use the main thread from now on
+      if (job) { running = null; startJob(job.text, job.version); }
+      return;
+    }
+    if (!job) return;
+    running = null;
+    idleWaiters = [];
+    hideProgress();
+    showJobResult({ status: 'failed', tooBig: true, deep: false, message: 'The browser stopped the worker', depth: null }, true);
+  }
+
+  // Runs f once the current job is done (right away when none is running).
+  function whenIdle(f) {
+    if (running) idleWaiters.push(f); else f();
+  }
+
+  // Stops the running job, if any, without showing anything.
+  function cancelJob() {
+    if (!running) return;
+    stopWorker();
+    jobs.cancel();
+    running = null;
+    idleWaiters = [];
+    hideProgress();
+  }
+
+  // ---- Progress, with Cancel ----
+  var jobProgress = $('jobProgress'), jobText = $('jobText'), jobTime = $('jobTime'), jobBar = $('jobBar'), btnCancelJob = $('btnCancelJob');
+  var progressTimer = null, progressTicker = null, reading = null;
+  var PHASES = { parse: 'Parsing', sort: 'Sorting keys of', format: 'Formatting', convert: 'Converting' };
+
+  // fraction: 0..1, or null for "working" without a known amount. cancellable: show Cancel.
+  // time: elapsed time, shown but not announced (it changes every half second).
+  function showProgress(label, fraction, cancellable, time) {
+    if (jobText.textContent !== label) jobText.textContent = label;
+    jobTime.textContent = time || '';
+    if (fraction === null || fraction === undefined) jobBar.removeAttribute('value');
+    else jobBar.value = fraction;
+    btnCancelJob.hidden = cancellable === false;
+    jobProgress.hidden = false;
+  }
+  function jobProgressTick() {
+    if (!running) return;
+    var secs = Math.floor((Date.now() - running.started) / 1000);
+    showProgress((PHASES[running.phase] || 'Working on') + ' ' + fmtBytes(running.size) + '\u2026', null, true, secs ? secs + ' s' : '');
+    clearTimeout(progressTicker);
+    progressTicker = setTimeout(jobProgressTick, 500);
+  }
+  function hideProgress() {
+    clearTimeout(progressTimer);
+    clearTimeout(progressTicker);
+    var hadFocus = jobProgress.contains(document.activeElement);
+    jobProgress.hidden = true;
+    output.closest('.pane-body').removeAttribute('aria-busy');
+    if (hadFocus) btnFormat.focus();
+  }
+
+  btnCancelJob.addEventListener('click', function () {
+    if (reading) { reading.abort(); return; }
+    if (!running) { hideProgress(); return; }
+    cancelJob();
+    shownKey = null;
+    setStatus('empty', 'Stopped', 'Formatting was stopped. Press Format (Ctrl/Cmd + Enter) to start it again.');
+    showEmpty('stopped', 'Stopped', 'The result is not up to date. Press Format to try again.');
+    finishView('stopped');
+    btnFormat.focus();
+  });
+
+  // ---- Running the input ----
+  // Small inputs are processed right here; bigger ones in the worker (see above).
+  function update(force) {
+    var text = inputText();
     if (sharedText !== null && text !== sharedText) clearShareHash();
-    var bytes = byteLen(text);
     refreshInputGutter();
     markErrorLine(null);
-    inMeta.innerHTML = text.length ? badges([fmtBytes(bytes), plural(T.countLines(text), 'line', 'lines')]) : '';
+    inMeta.innerHTML = inputMeta(text);
     outTitle.textContent = outFormat === 'json' ? (mode === 'minify' ? 'Minified JSON' : 'Formatted JSON') : FORMATS[outFormat].label + ' output';
-    var view;
 
-    if (!text.trim()) {
-      view = 'empty';
+    if (!hasText(text)) {
+      cancelJob();
+      shownKey = null;
       setStatus('empty', 'Ready', 'Paste or type JSON to begin.');
       showEmpty('empty', 'Nothing to format yet', 'Paste JSON into the input, open a file, or load the sample.');
+      finishView('empty');
+      return;
+    }
+    if (text.length <= SYNC_CHARS) {
+      cancelJob();
+      shownKey = null;
+      showJobResult(T.runJob(text, jobOptions()), false);
+      return;
+    }
+    if (editPaused && force !== true && force !== 'options') return;
+    editPaused = false;
+    syncInputNote();
+    startJob(text, textVersion);
+  }
+
+  // Shows a job's result (from runJob here, or a message from the worker).
+  function showJobResult(r, async) {
+    var view;
+    if (r.status === 'failed') {
+      view = 'failed';
+      showFailure(r);
+    } else if (r.status === 'invalid') {
+      var err = r.error;
+      view = 'invalid';
+      markErrorLine(err.line);
+      setStatus('invalid', 'Invalid', esc(err.message) + '.' +
+        (fixFailure ? ' <span class="fix-note">Couldn\u2019t fix this automatically: ' + esc(fixFailure) + '.</span>' : ''),
+        err.line ? [{ text: 'Line ' + err.line + ', col ' + err.col, code: true }] : null);
+      var actions = document.createElement('span');
+      actions.className = 'status-actions';
+      if (!fixFailure) actions.appendChild(statusButton('btnFix', 'Fix JSON', applyFix, true));
+      if (err.pos !== null) actions.appendChild(statusButton('btnGoError', 'Go to error', function () { jumpTo(err); }));
+      statusEl.appendChild(actions);
+      showEmpty('error', 'No result yet', 'Fix the error in the input and the result appears here.');
     } else {
-      var value, err = null, failure = null;
-      try {
-        value = JSON.parse(text);
-      } catch (e) {
-        // Syntax errors get a location; anything else (such as Firefox's "too much
-        // recursion" on very deep input) is a failure to process valid-looking JSON.
-        if (e instanceof SyntaxError) err = describeError(e, text);
-        else failure = e;
-      }
-
-      var formatted = null;
-      if (!err && !failure) {
-        try {
-          formatted = formatValue(value, bytes);
-        } catch (e) {
-          failure = e;
-        }
-      }
-
-      if (failure) {
-        view = 'failed';
-        showFailure(failure, value);
-      } else if (err) {
-        view = 'invalid';
-        markErrorLine(err.line);
-        setStatus('invalid', 'Invalid', esc(err.message) + '.' +
-          (fixFailure ? ' <span class="fix-note">Couldn\u2019t fix this automatically: ' + esc(fixFailure) + '.</span>' : ''),
-          err.line ? [{ text: 'Line ' + err.line + ', col ' + err.col, code: true }] : null);
-        var actions = document.createElement('span');
-        actions.className = 'status-actions';
-        if (!fixFailure) actions.appendChild(statusButton('btnFix', 'Fix JSON', applyFix, true));
-        if (err.pos !== null) actions.appendChild(statusButton('btnGoError', 'Go to error', function () { jumpTo(err); }));
-        statusEl.appendChild(actions);
-        showEmpty('error', 'No result yet', 'Fix the error in the input and the result appears here.');
-      } else if (formatted.unsupported) {
+      // The tree is rebuilt only when the data could have changed (input text or Sort keys).
+      // A result from the worker has no value here: the tree parses the input when needed.
+      var source = textVersion + '|' + sortBox.checked;
+      if (source !== treeSource) { treeSource = source; treeValue = r.value; treeLoad = null; treeDirty = true; }
+      var stats = [r.kind, plural(r.stats.keys, 'key', 'keys') + ' in total', 'depth ' + r.stats.depth];
+      if (r.status === 'unsupported') {
         view = 'unsupported';
-        var source0 = text + '|' + sortBox.checked;
-        if (source0 !== treeSource) { treeSource = source0; treeValue = formatted.value; treeDirty = true; }
-        setStatus('valid', 'Valid', fixNotice ? esc(fixNotice) : 'Valid JSON', [
-          kindOf(formatted.value),
-          plural(formatted.stats.keys, 'key', 'keys') + ' in total',
-          'depth ' + formatted.stats.depth
-        ]);
-        showEmpty('info', 'Can\u2019t show this as ' + FORMATS[outFormat].label, formatted.unsupported);
+        setStatus('valid', 'Valid', fixNotice ? esc(fixNotice) : 'Valid JSON', stats);
+        showEmpty('info', 'Can\u2019t show this as ' + FORMATS[outFormat].label, r.message);
         btnShare.disabled = false;   // the JSON itself can still be shared
       } else {
         view = 'valid-' + mode;
-        lastOutput = formatted.result;
-        // The tree is rebuilt only when the data could have changed (input text or Sort keys).
-        var source = text + '|' + sortBox.checked;
-        if (source !== treeSource) { treeSource = source; treeValue = formatted.value; treeDirty = true; }
-        if (formatted.html !== null) outCode.innerHTML = formatted.html;
-        else outCode.textContent = formatted.result;
-        lastHtml = formatted.html;
-        lastTokens = formatted.tokens;
-        codeHasMarks = false;
-        outCode.classList.toggle('hl', formatted.html !== null);
-        setGutterLines('output', outGutter, outTrack, T.countLines(formatted.result));
+        lastOutput = r.output;
+        lastResultAsync = async;
+        outCode.classList.add('hl');
+        codeView.setText(r.output, r.index, r.restarts, T.scannerFor(outFormat, csvOpts), true);
         showResult();
         if (searchActive()) runSearch(true);   // the data changed: search it again
-        outMeta.innerHTML = badges(formatted.meta);
+        var meta = [fmtBytes(r.outBytes)];
+        if (mode === 'minify' && outFormat === 'json' && r.inBytes > 0) {
+          var saved = Math.round((1 - r.outBytes / r.inBytes) * 100);
+          // The input's size is on the input pane; here, the result and what was saved
+          // (short enough to keep the header on one row).
+          if (saved > 0) meta.push('\u2212' + saved + '%');
+        }
+        outMeta.innerHTML = badges(meta);
         btnCopy.disabled = false;
-        btnUse.disabled = false;
         btnCopyPath.disabled = btnCopyValue.disabled = outFormat !== 'json';
         btnUse.disabled = outFormat !== 'json';
         btnDownload.disabled = false;
         btnShare.disabled = false;
-
-        setStatus('valid', 'Valid', fixNotice ? esc(fixNotice) : 'Valid JSON', [
-          kindOf(formatted.value),
-          plural(formatted.stats.keys, 'key', 'keys') + ' in total',
-          'depth ' + formatted.stats.depth
-        ]);
+        setStatus('valid', 'Valid', fixNotice ? esc(fixNotice) : 'Valid JSON', stats);
         if (fixNotice && fixUndo !== null) {
           var undoWrap = document.createElement('span');
           undoWrap.className = 'status-actions';
@@ -285,8 +539,11 @@
         }
       }
     }
+    finishView(view);
+  }
 
-    // Fade in only when what is shown changes, not on every keystroke.
+  // Fade in only when what is shown changes, not on every keystroke.
+  function finishView(view) {
     if (view !== lastView) {
       reveal(statusEl);
       reveal(!outEmpty.hidden ? outEmpty : currentView() === 'tree' ? treeView : output);
@@ -312,47 +569,74 @@
   var applyingFix = false;
 
   function applyFix() {
-    var before = input.value;
-    var r = T.repairJson(before);
-    if (!r.ok || !r.changed) {
-      fixFailure = r.ok ? 'it is already valid' : r.error;
-      update();
-      var go = $('btnGoError');
-      if (go) go.focus();
+    var before = inputText();
+    if (before.length > SYNC_CHARS) {
+      // Big inputs are repaired in the worker.
+      showProgress('Fixing ' + fmtBytes(bigText !== null ? bigBytes : byteLen(before)) + '\u2026', null, false);
+      request({ type: 'repair', text: before }, function (m) {
+        hideProgress();
+        if (m.type === 'repair' && inputText() === before) finishFix(before, m.result);
+      });
       return;
     }
-    // Replace the text through the editing pipeline so Ctrl+Z / Cmd+Z can undo the fix.
-    applyingFix = true;
-    input.focus();
-    input.setSelectionRange(0, before.length);
-    var kept = false;
-    try { kept = document.execCommand('insertText', false, r.text); } catch (e) {}
-    if (!kept || input.value !== r.text) {
-      input.value = r.text;   // fallback: no browser undo, so offer an "Undo fix" button
+    finishFix(before, T.repairJson(before));
+  }
+
+  function finishFix(before, r) {
+    if (!r.ok || !r.changed) {
+      fixFailure = r.ok ? 'it is already valid' : r.error;
+      update(true);
+      whenIdle(function () {
+        var go = $('btnGoError');
+        if (go) go.focus();
+      });
+      return;
+    }
+    if (bigText !== null || isBigText(r.text)) {
+      // The read-only view has no undo of its own: offer an "Undo fix" button.
+      setInputText(r.text);
       fixUndo = before;
     } else {
-      fixUndo = null;
+      // Replace the text through the editing pipeline so Ctrl+Z / Cmd+Z can undo the fix.
+      applyingFix = true;
+      input.focus();
+      input.setSelectionRange(0, before.length);
+      var kept = false;
+      try { kept = document.execCommand('insertText', false, r.text); } catch (e) {}
+      if (!kept || input.value !== r.text) {
+        setInputText(r.text);   // fallback: no browser undo, so offer an "Undo fix" button
+        fixUndo = before;
+      } else {
+        fixUndo = null;
+      }
+      applyingFix = false;
     }
-    applyingFix = false;
     fixNotice = r.summary;
     treeResetNext = true;
     fixFailure = null;
     clearTimeout(timer);
-    update();
-    input.setSelectionRange(0, 0);
-    input.scrollTop = 0;
+    update(true);
+    if (bigText === null) {
+      input.setSelectionRange(0, 0);
+      input.scrollTop = 0;
+    }
   }
 
   function undoFix() {
     if (fixUndo === null) return;
-    input.value = fixUndo;
+    setInputText(fixUndo);
     fixUndo = null;
     fixNotice = null;
-    update();
-    input.focus();
+    update(true);
+    (bigText !== null ? inputView : input).focus();
   }
 
   function jumpTo(err) {
+    if (bigText !== null) {
+      inputView.focus();
+      bigInputView.select(Math.min(err.pos, bigText.length), Math.min(err.pos + 1, bigText.length));
+      return;
+    }
     input.focus();
     var end = Math.min(err.pos + 1, input.value.length);
     try { input.setSelectionRange(Math.min(err.pos, input.value.length), end); } catch (e) {}
@@ -366,15 +650,19 @@
     btnMinify.classList.toggle('active', m === 'minify');
     btnFormat.setAttribute('aria-pressed', String(m === 'format'));
     btnMinify.setAttribute('aria-pressed', String(m === 'minify'));
-    update();
+    clearTimeout(timer);
+    update(true);
   }
 
   btnFormat.addEventListener('click', function () { setMode('format'); });
   btnMinify.addEventListener('click', function () { setMode('minify'); });
   $('btnValidate').addEventListener('click', function () {
-    update();
-    var b = $('btnGoError') || $('btnFix');
-    if (b) b.focus();
+    clearTimeout(timer);
+    update(true);
+    whenIdle(function () {
+      var b = $('btnGoError') || $('btnFix');
+      if (b) b.focus();
+    });
   });
   // Indent choice is remembered like the theme (wrapped in try/catch for private modes).
   var INDENT_KEY = 'json-formatter-indent';
@@ -386,12 +674,13 @@
     try { localStorage.setItem(INDENT_KEY, indentSel.value); } catch (e) {}
     setMode('format');
   });
-  sortBox.addEventListener('change', function () { update(); });
+  sortBox.addEventListener('change', function () { update('options'); });
 
   var timer = null;
   input.addEventListener('input', function () {
     refreshInputGutter(); // immediately, so numbers keep up with fast typing and pastes
     inputDirty = true;
+    textVersion++;
     if (!applyingFix) {
       // Any edit (including Ctrl+Z undoing a fix) clears the fix summary and failure note.
       fixNotice = null;
@@ -399,31 +688,84 @@
       fixUndo = null;
     }
     clearTimeout(timer);
+    if (input.value.length > SYNC_CHARS) {
+      // Large input: formatting waits for Format (Ctrl/Cmd + Enter) instead of every pause.
+      if (!editPaused) { editPaused = true; syncInputNote(); }
+      if (lastView === 'empty') {
+        // Nothing was formatted yet: say how to get a result, not "nothing to format".
+        setStatus('empty', 'Ready', 'Press Format (Ctrl/Cmd + Enter) to format this input.');
+        showEmpty('empty', 'Not formatted yet', 'This input is large, so it is formatted when you press Format.');
+      }
+      return;
+    }
+    if (editPaused) { editPaused = false; syncInputNote(); }
     timer = setTimeout(update, 160);
   });
-  input.addEventListener('scroll', syncInputGutter, { passive: true });
-  input.addEventListener('keydown', function (e) {
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'Enter') { e.preventDefault(); setMode('format'); }
+  // Pasting a big text: show it in the read-only view instead of loading the text box,
+  // which would freeze the page for seconds.
+  input.addEventListener('paste', function (e) {
+    var data = e.clipboardData && e.clipboardData.getData('text/plain');
+    if (!data || data.length < 20000) return;
+    var v = input.value, next = v.slice(0, input.selectionStart) + data + v.slice(input.selectionEnd);
+    if (!isBigText(next)) return;
+    e.preventDefault();
+    treeResetNext = true;
+    inputDirty = true;
+    loadedFileName = null;
+    fixNotice = fixFailure = fixUndo = null;
+    setInputText(next);
+    update(true);
   });
+  // Pasting into the read-only view replaces the input.
+  inputView.addEventListener('paste', function (e) {
+    var data = e.clipboardData && e.clipboardData.getData('text/plain');
+    if (!data) return;
+    e.preventDefault();
+    treeResetNext = true;
+    inputDirty = true;
+    loadedFileName = null;
+    fixNotice = fixFailure = fixUndo = null;
+    setInputText(data);
+    update(true);
+  });
+  input.addEventListener('scroll', syncInputGutter, { passive: true });
+  function formatShortcut(e) {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'Enter') { e.preventDefault(); setMode('format'); }
+  }
+  input.addEventListener('keydown', formatShortcut);
+  inputView.addEventListener('keydown', formatShortcut);
   // Ctrl/Cmd + Shift + Enter: Fix JSON (only when the input is invalid).
   document.addEventListener('keydown', function (e) {
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Enter') {
       e.preventDefault();
       clearTimeout(timer);
-      update();
-      if (statusEl.getAttribute('data-state') === 'invalid' && $('btnFix')) applyFix();
+      update(true);
+      whenIdle(function () {
+        if (statusEl.getAttribute('data-state') === 'invalid' && $('btnFix')) applyFix();
+      });
     }
   });
 
-  $('btnSample').addEventListener('click', function () { treeResetNext = true; loadedFileName = null; inputDirty = false; input.value = SAMPLE; setMode('format'); });
-  $('btnClear').addEventListener('click', function () { treeResetNext = true; loadedFileName = null; inputDirty = false; input.value = ''; update(); input.focus(); });
+  function resetFor(name, dirty) {
+    treeResetNext = true;
+    loadedFileName = name;
+    inputDirty = dirty;
+    fixNotice = fixFailure = fixUndo = null;
+  }
+  $('btnSample').addEventListener('click', function () { resetFor(null, false); setInputText(SAMPLE); setMode('format'); });
+  $('btnClear').addEventListener('click', function () {
+    resetFor(null, false);
+    if (reading) reading.abort();
+    setInputText('');
+    update(true);
+    input.focus();
+  });
 
   btnUse.addEventListener('click', function () {
     if (!lastOutput) return;
-    treeResetNext = true;
-    inputDirty = true;
-    input.value = lastOutput;
-    update();
+    resetFor(null, true);
+    setInputText(lastOutput);
+    update(true);
   });
 
   // "Copied" shows as a message like the other copy actions (the button may be icon-only).
@@ -431,13 +773,78 @@
     if (lastOutput) copyText(lastOutput, 'Copied');
   });
 
-  $('fileIn').addEventListener('change', function (e) {
-    var f = e.target.files && e.target.files[0];
+  // ---- Opening and dropping files ----
+  // Files are read with the File API in the background, with their size shown first and a
+  // Cancel button. Files too big for the browser get a message instead of a crash.
+  function openFile(f) {
     if (!f) return;
+    if (reading) reading.abort();
+    cancelJob();
+    var size = fmtBytes(f.size), name = f.name || 'file';
+    if (f.size > MAX_FILE_BYTES) {
+      shownKey = null;
+      setStatus('invalid', 'Too big', esc(name) + ' is ' + size + ', more than the ' + fmtBytes(MAX_FILE_BYTES) + ' this page can open.');
+      showEmpty('error', 'This file is too big', 'Browsers run out of memory with JSON files this big. Try a smaller file, or split it into parts.');
+      finishView('too-big');
+      return;
+    }
     var reader = new FileReader();
-    reader.onload = function () { treeResetNext = true; loadedFileName = f.name; inputDirty = true; input.value = String(reader.result || ''); setMode('format'); };
+    reading = reader;
+    showProgress('Reading ' + name + ' (' + size + ')\u2026', 0, true);
+    reader.onprogress = function (e) {
+      if (reading !== reader || !e.lengthComputable) return;
+      showProgress('Reading ' + name + ' (' + fmtBytes(e.loaded) + ' of ' + size + ')\u2026', e.total ? e.loaded / e.total : null, true);
+    };
+    reader.onload = function () {
+      if (reading !== reader) return;
+      reading = null;
+      hideProgress();
+      resetFor(name, true);
+      setInputText(String(reader.result || ''), { bytes: f.size });
+      setMode('format');
+    };
+    reader.onerror = function () {
+      if (reading !== reader) return;
+      reading = null;
+      hideProgress();
+      shownKey = null;
+      var big = reader.error && /NotReadable|Range|memory/i.test(reader.error.name + ' ' + reader.error.message) && f.size > 64 * 1048576;
+      setStatus('invalid', 'Error', big ? 'This file is too big for the browser to read.' : 'Couldn\u2019t read ' + esc(name) + '.');
+      showEmpty('error', 'Can\u2019t open this file', big ? 'Try a smaller file, or split it into parts.' :
+        'The browser couldn\u2019t read it. It may have been moved, or be in use by another program.');
+      finishView('read-error');
+    };
+    reader.onabort = function () {
+      if (reading !== reader) return;
+      reading = null;
+      hideProgress();
+      showToast('Stopped reading ' + name);
+    };
     reader.readAsText(f);
+  }
+
+  $('fileIn').addEventListener('change', function (e) {
+    openFile(e.target.files && e.target.files[0]);
     e.target.value = '';
+  });
+
+  // Drop a file anywhere on the input pane.
+  var inputPane = input.closest('.pane');
+  function hasFiles(e) { return e.dataTransfer && [].indexOf.call(e.dataTransfer.types || [], 'Files') !== -1; }
+  inputPane.addEventListener('dragover', function (e) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    inputPane.classList.add('drop-target');
+  });
+  inputPane.addEventListener('dragleave', function (e) {
+    if (!inputPane.contains(e.relatedTarget)) inputPane.classList.remove('drop-target');
+  });
+  inputPane.addEventListener('drop', function (e) {
+    inputPane.classList.remove('drop-target');
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    openFile(e.dataTransfer.files[0]);
   });
 
   // ---- Output view: Code or Tree ----
@@ -457,8 +864,9 @@
   function showResult() {
     outEmpty.hidden = true;
     pathBar.hidden = outFormat !== 'json';
-    // Keep the selected path while it still exists in the (possibly edited) data.
-    if (T.valueAtPath(treeValue, selectedParts) === undefined) selectedParts = [];
+    // Keep the selected path while it still exists in the (possibly edited) data. (Not known
+    // yet when the data is only in the worker; the path is kept until the tree is built.)
+    if (treeValue !== undefined && T.valueAtPath(treeValue, selectedParts) === undefined) selectedParts = [];
     renderCrumbs();
     var view = currentView();
     output.hidden = view !== 'code';
@@ -861,6 +1269,12 @@
   //  - After loading new data: the first two levels open.
   var pendingTreeRestore = null;
   function buildTree(opts) {
+    if (treeValue === undefined) {
+      // The data was processed in the worker: parse the input here, in slices, first.
+      treeDirty = true;
+      loadTreeValue(function () { if (currentView() === 'tree' && treeDirty) buildTree(opts); });
+      return;
+    }
     opts = opts || {};
     var restore = opts.restore || pendingTreeRestore || null, typing = false;
     pendingTreeRestore = null;
@@ -895,6 +1309,32 @@
     } else {
       openDefault();
     }
+  }
+
+  // Gets the parsed data for the tree when the worker did the formatting: the input is
+  // parsed again here with createParser, a few milliseconds at a time, so the page stays
+  // responsive (receiving the worker's copy would block the page while it is copied in).
+  var treeLoad = null;
+  function loadTreeValue(done) {
+    if (treeLoad && treeLoad.source === treeSource) { treeLoad.waiting.push(done); return; }
+    var mine = treeLoad = { source: treeSource, waiting: [done] };
+    var p = T.createParser(inputText(), { sort: sortBox.checked });
+    setBusy(1);
+    setTreeNote('Preparing the tree\u2026');
+    (function step() {
+      if (treeLoad !== mine) { setBusy(-1); return; }   // the data changed in the meantime
+      if (!p.step(12)) {
+        setTreeNote('Preparing the tree\u2026 ' + Math.floor(p.progress() * 100) + '%');
+        setTimeout(step, 0);
+        return;
+      }
+      treeLoad = null;
+      setBusy(-1);
+      setTreeNote('');
+      if (p.error) { setTreeNote('Couldn\u2019t build the tree for this data.'); return; }
+      treeValue = p.value;
+      mine.waiting.forEach(function (f) { f(); });
+    })();
   }
 
   function findRowByPath(path) {
@@ -1089,44 +1529,35 @@
     return row;
   }
 
-  // Code view: map between character offsets in the output text and DOM positions.
-  function codeOffset() {
-    var sel = window.getSelection();
-    if (!sel.rangeCount || !outCode.contains(sel.focusNode)) return null;
-    var r = document.createRange();
-    r.setStart(outCode, 0);
-    r.setEnd(sel.focusNode, sel.focusOffset);
-    return r.toString().length;
-  }
-  function domPoint(offset) {
-    var walker = document.createTreeWalker(outCode, NodeFilter.SHOW_TEXT), node, pos = 0;
-    while ((node = walker.nextNode())) {
-      if (pos + node.length >= offset) return { node: node, offset: offset - pos };
-      pos += node.length;
-    }
-    return null;
-  }
+  // Code view: clicking a value shows its path; the breadcrumb selects a value. For results
+  // from the worker, it finds the path (it has the text and the data).
   output.addEventListener('click', function () {
-    var offset = codeOffset();
-    if (offset === null || !lastOutput || outFormat !== 'json') return;
+    if (!lastOutput || outFormat !== 'json') return;
+    var sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return;
+    var offset = codeView.offsetOf(sel.focusNode, sel.focusOffset);
+    if (offset === null) return;
+    if (lastResultAsync) {
+      var shown = lastOutput;
+      request({ type: 'pathAt', offset: offset }, function (m) {
+        if (m.type === 'pathAt' && m.path && lastOutput === shown) selectPath(m.path);
+      });
+      return;
+    }
     try { selectPath(T.pathAtOffset(lastOutput, offset)); } catch (e) {}
   });
   // Selects a value's text in the Code view and scrolls it into view.
   function selectInCode(parts) {
+    if (lastResultAsync) {
+      var shown = lastOutput;
+      request({ type: 'rangeOf', parts: parts }, function (m) {
+        if (m.type === 'rangeOf' && m.range && lastOutput === shown) codeView.select(m.range.start, m.range.end);
+      });
+      return;
+    }
     var range = null;
     try { range = T.rangeOfPath(lastOutput, parts); } catch (e) {}
-    if (!range) return;
-    var a = domPoint(range.start), b = domPoint(range.end);
-    if (!a || !b) return;
-    var r = document.createRange();
-    r.setStart(a.node, a.offset);
-    r.setEnd(b.node, b.offset);
-    var sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(r);
-    var rect = r.getClientRects()[0] || r.getBoundingClientRect(), box = output.getBoundingClientRect();
-    output.scrollTop += rect.top - box.top - box.height / 3;
-    output.scrollLeft = Math.max(0, output.scrollLeft + rect.left - box.left - 80);
+    if (range) codeView.select(range.start, range.end);
   }
 
   // Copying, with a short "Copied" message that is also announced to screen readers.
@@ -1173,6 +1604,15 @@
     copyText(p, 'Copied ' + (p || '(root)'));
   }
   function copyValue(parts) {
+    var indent = indentSel.value === 'tab' ? '\t' : +indentSel.value;
+    if (treeValue === undefined && lastResultAsync) {
+      // The data is in the worker: it makes the text.
+      request({ type: 'copyValue', parts: parts, indent: indent }, function (m) {
+        if (m.type === 'copyValue' && m.text !== null) copyText(m.text, 'Copied value of ' + (pathText(parts) || 'the root'));
+        else if (m.type === 'error' && !m.cancelled) showToast('Couldn\u2019t copy this value');
+      });
+      return;
+    }
     var v = T.valueAtPath(treeValue, parts), text;
     if (v === undefined) return;
     try { text = T.copyValueText(v, indentSel.value === 'tab' ? '\t' : +indentSel.value); }
@@ -1217,7 +1657,7 @@
   var searchOpen = false, searchFilter = false, searchReturn = null, searchTimer = null, searchGen = 0, searching = false;
   var hits = [], hitsTruncated = false, hitsError = null, current = -1;
   var matchIndex = null, treeFilter = null, savedTreeState = null;
-  var lastHtml = null, lastTokens = null, codeHasMarks = false, codeMarksDirty = false;
+  var codeMarksDirty = false;
 
   function searchActive() { return searchOpen && !!searchInput.value && !!lastOutput; }
 
@@ -1282,20 +1722,41 @@
     var gen = ++searchGen, query = searchInput.value;
     if (!searchOpen || !query || !lastOutput) {
       searching = false;
-      setHits([], false, null, query && searchOpen && !lastOutput && input.value.trim() ? 'Fix the input to search it' : '');
+      setHits([], false, null, query && searchOpen && !lastOutput && hasText(inputText()) && lastView !== 'stopped' ? 'Fix the input to search it' : '');
       if (then) then();
       return;
     }
     var prev = keepCurrent && current >= 0 ? hits[current] : null;
-    if (outFormat !== 'json') {
-      // Other formats: search the text that is showing.
-      var r = T.searchText(lastOutput, query, searchOpts), same = -1;
-      for (var j = 0; prev && j < r.matches.length; j++) if (r.matches[j].start === prev.start) { same = j; break; }
+    var finish = function (matches, truncated, error) {
       searching = false;
-      setHits(r.matches, r.truncated, r.error, null, same);
+      var keep = -1;
+      for (var i = 0; prev && i < matches.length; i++) {
+        var m = matches[i];
+        if (!m.path ? m.start === prev.start : m.where === prev.where && m.start === prev.start && m.path.length === prev.path.length &&
+            T.formatPath(m.path, 'js') === T.formatPath(prev.path, 'js')) { keep = i; break; }
+      }
+      setHits(matches, truncated, error, null, keep);
       announce(countMessage());
       if (current >= 0) showCurrent();
       if (then) then();
+    };
+    if (lastResultAsync) {
+      // A big result: the worker searches its copy (the data for JSON, else the text) and
+      // also finds where JSON matches are in the text.
+      searching = true;
+      var shown = lastOutput;
+      request({ type: 'search', query: query, opts: searchOpts }, function (m) {
+        if (gen !== searchGen || lastOutput !== shown) return;
+        if (m.type !== 'search') { searching = false; if (!m.cancelled) setHits([], false, null, ''); return; }
+        if (m.ranges) for (var i = 0; i < m.matches.length; i++) m.matches[i].range = m.ranges[i];
+        finish(m.matches, m.truncated, m.error);
+      });
+      return;
+    }
+    if (outFormat !== 'json') {
+      // Other formats: search the text that is showing.
+      var r = T.searchText(lastOutput, query, searchOpts);
+      finish(r.matches, r.truncated, r.error);
       return;
     }
     var s = T.createSearch(treeValue, query, searchOpts);
@@ -1305,19 +1766,7 @@
       var t0 = performance.now();
       while (!s.done && performance.now() - t0 < 12) s.step(2000);
       if (!s.done) { setTimeout(step, 0); return; }
-      searching = false;
-      var keep = -1;
-      if (prev) {
-        for (var i = 0; i < s.matches.length; i++) {
-          var m = s.matches[i];
-          if (m.where === prev.where && m.start === prev.start && m.path.length === prev.path.length &&
-              T.formatPath(m.path, 'js') === T.formatPath(prev.path, 'js')) { keep = i; break; }
-        }
-      }
-      setHits(s.matches, s.truncated, s.error, null, keep);
-      announce(countMessage());
-      if (current >= 0) showCurrent();
-      if (then) then();
+      finish(s.matches, s.truncated, s.error);
     })();
   }
 
@@ -1517,32 +1966,21 @@
   }
 
   // ---- Highlights in the Code view ----
+  // The Code view draws marks on the rows it shows; it gets every match as a text range.
+  // JSON matches come with their range from the worker, or are located in the text here.
   function renderCodeMarks() {
     codeMarksDirty = false;
     if (!lastOutput) return;
-    if (!hits.length) {
-      if (codeHasMarks) {
-        if (lastHtml !== null) outCode.innerHTML = lastHtml; else outCode.textContent = lastOutput;
-        codeHasMarks = false;
-      }
-      return;
-    }
-    var ranges = hits[0].path ? T.locateMatches(lastOutput, hits) : hits, list = [];
+    if (!hits.length) { codeView.setMarks(null, -1); return; }
+    var ranges = !hits[0].path ? hits : hits[0].range !== undefined ? hits.map(function (h) { return h.range; }) : T.locateMatches(lastOutput, hits);
+    var list = [];
     for (var i = 0; i < ranges.length; i++) if (ranges[i]) list.push({ start: ranges[i].start, end: ranges[i].end, i: i });
-    outCode.innerHTML = hits[0].path ? T.highlightMarked(lastOutput, list, lastHtml !== null)
-      : T.renderTokens(lastOutput, lastHtml !== null && lastTokens ? lastTokens : [], list);
-    codeHasMarks = true;
-    markCurrentCode(false);
+    codeView.setMarks(list, current);
   }
+  // A text match can be split across several marks (one per highlighted token).
   function markCurrentCode(scroll) {
-    var old = outCode.querySelectorAll('mark.current');
-    for (var o = 0; o < old.length; o++) old[o].classList.remove('current');
-    if (current < 0) return;
-    // A text match can be split across several marks (one per highlighted token).
-    var mks = outCode.querySelectorAll('mark[data-i="' + current + '"]');
-    if (!mks.length) return;
-    for (var k = 0; k < mks.length; k++) mks[k].classList.add('current');
-    if (scroll) scrollIntoBox(output, mks[0]);
+    if (codeMarksDirty) renderCodeMarks();
+    codeView.setCurrent(current, scroll);
   }
 
   // ---- Filter (tree only) ----
@@ -1725,8 +2163,15 @@
   function shareLink() {
     if (!lastOutput) return;
     var settings = { indent: indentSel.value, sortKeys: sortBox.checked, mode: mode, view: outView };
+    var text = inputText();
+    if (text.length > 20 * T.SHARE_MAX_LENGTH) {
+      // Far too big for a link even compressed: say so without compressing it first.
+      showSharePanel(['This JSON is too big to share by link. Use Download and send the file instead.'],
+        [{ label: 'Download instead', solid: true, onClick: function () { hideSharePanel(); downloadOutput(); } }, dismiss]);
+      return;
+    }
     btnShare.disabled = true;
-    T.encodeShare(input.value, settings).then(function (hash) {
+    T.encodeShare(text, settings).then(function (hash) {
       btnShare.disabled = !lastOutput;
       var link = shareBase() + '#' + hash, size = T.shareLinkCheck(link.length);
       var chars = T.groupDigits(size.length) + ' characters';
@@ -1772,10 +2217,8 @@
     if (s.indent) indentSel.value = s.indent;
     if (typeof s.sortKeys === 'boolean') sortBox.checked = s.sortKeys;
     if (s.view) setOutView(s.view, false);
-    treeResetNext = true;
-    loadedFileName = null;
-    inputDirty = false;
-    input.value = r.text;
+    resetFor(null, false);
+    setInputText(r.text);
     sharedText = r.text;
     setMode(s.mode || 'format');
     showToast('Opened shared JSON');
@@ -1792,7 +2235,7 @@
         showSharePanel([why], [dismiss]);
         return;
       }
-      if (inputDirty && input.value !== r.text) {
+      if (inputDirty && inputText() !== r.text) {
         showSharePanel(['This link has shared JSON in it. Opening it replaces the JSON in the input.'], [
           { label: 'Open shared JSON', solid: true, onClick: function () { hideSharePanel(); applyShared(r); } },
           { label: 'Keep my JSON', onClick: function () { hideSharePanel(); clearShareHash(); } }
@@ -1813,7 +2256,7 @@
     csvOpts.delimiter = csvDelimiter.value === 'tab' ? '\t' : csvDelimiter.value;
     csvOpts.protect = csvProtect.checked;
     try { localStorage.setItem(CSV_KEY, JSON.stringify(csvOpts)); } catch (e) {}
-    update();
+    update('options');
   }
   csvDelimiter.addEventListener('change', saveCsvOptions);
   csvProtect.addEventListener('change', saveCsvOptions);
@@ -1825,7 +2268,7 @@
     tsOpts.style = tsStyle.value === 'type' ? 'type' : 'interface';
     tsOpts.rootName = tsRoot.value;
     try { localStorage.setItem(TS_KEY, JSON.stringify(tsOpts)); } catch (e) {}
-    update();
+    update('options');
   }
   tsStyle.addEventListener('change', saveTsOptions);
   tsRoot.addEventListener('input', function () { clearTimeout(tsTimer); tsTimer = setTimeout(saveTsOptions, 200); });
@@ -1839,7 +2282,7 @@
     syncSearchOptions();
     syncFormatBars();
     btnFilter.hidden = currentView() !== 'tree';
-    update();
+    update('options');
   });
 
   // ---- Download ----
@@ -1854,8 +2297,9 @@
     }
     var name = T.downloadName(loadedFileName, mode === 'minify', outFormat);
     // CSV starts with a UTF-8 byte order mark so Excel shows accents and emoji correctly.
-    var body = (FORMATS[outFormat].bom ? '\ufeff' : '') + lastOutput;
-    var url = URL.createObjectURL(new Blob([body], { type: FORMATS[outFormat].mime }));
+    // (As separate parts, so a big output is not copied into a new string first.)
+    var parts = FORMATS[outFormat].bom ? ['\ufeff', lastOutput] : [lastOutput];
+    var url = URL.createObjectURL(new Blob(parts, { type: FORMATS[outFormat].mime }));
     var a = el('a');
     a.href = url;
     a.download = name;
@@ -1872,8 +2316,8 @@
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 's' || e.key === 'S')) {
       e.preventDefault();
       clearTimeout(timer);
-      update();
-      downloadOutput();
+      update(true);
+      whenIdle(downloadOutput);
     }
   });
 
@@ -1928,7 +2372,7 @@
 
   applyTheme(root.getAttribute('data-theme') === 'dark' ? 'dark' : 'light', false);
 
-  input.value = SAMPLE;
+  setInputText(SAMPLE);
   update();
   openShareHash();
 })();

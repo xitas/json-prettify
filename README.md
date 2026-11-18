@@ -21,6 +21,7 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 - **Output as TypeScript**: interfaces or type aliases inferred from the data, with an editable root name. Nested types get PascalCase names (`users` → `User`), identical shapes share one type, and array items are merged so missing properties become optional and mixed values become unions
 - **Search** the output in both views: keys, values or both, match case, whole word and regex, with next/previous, a match count and a Filter that shows only matching branches of the tree
 - **Syntax highlighting** for keys, strings, numbers, booleans and null
+- **Large files** (tested up to 50 MB): formatting and converting run in a Web Worker so the page never freezes, the Code view draws only the lines on screen, and long jobs show progress with a Cancel button. Files are read in the background with their size shown first; very large inputs are shown read-only, and typing in a large input waits for **Format** instead of re-formatting on every pause
 - **Copy** the result, **download** it as a `.json` file (a loaded `data.json` saves as `data.formatted.json` or `data.min.json`), or use it as the new input
 - **Open a file** from your device, or load a sample to try it out
 - Keyboard shortcuts: `Ctrl/Cmd + Enter` to format, `Ctrl/Cmd + Shift + Enter` to fix broken JSON, `Ctrl/Cmd + S` to download the result, `Ctrl/Cmd + F` (in the output) or `/` to search
@@ -34,10 +35,14 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 │   ├── css/
 │   │   └── style.css       # Styles and light/dark theme tokens
 │   └── js/
-│       ├── json-tools.js   # Pure helpers: error parsing, sorting, stats, highlighting
-│       └── app.js          # UI wiring: toolbar, input/output panes, status line
+│       ├── json-tools.js   # Pure helpers: parsing, sorting, stats, conversions, highlighting, jobs
+│       ├── code-view.js    # Virtual Code view: draws only the rows on screen
+│       └── app.js          # UI wiring: toolbar, input/output panes, status line, worker
+├── scripts/
+│   └── make-large-files.mjs  # Writes big JSON files for testing (not committed)
 ├── tests/
-│   └── json-tools.test.js  # Unit tests for json-tools.js
+│   ├── json-tools.test.js  # Unit tests for json-tools.js
+│   └── big-text.test.js    # Unit tests for the large-file helpers and the worker
 ├── .github/workflows/
 │   └── test.yml            # Runs the tests on every push and pull request
 └── README.md
@@ -71,6 +76,8 @@ npm ci
 npm test
 ```
 
+To try the page with big inputs, `npm run large-files` writes 1, 5, 20 and 50 MB files (formatted and minified) to `test-data/large/`, which git ignores. Pass other sizes in MB to make those instead, for example `npm run large-files -- 2 100`.
+
 Known bugs are recorded as tests marked `todo`: they describe the correct behavior, run with the rest of the suite and show up as `TODO` in the output, but do not fail it until the bug is fixed. There are no known bugs at the moment. GitHub Actions runs the same commands on every push and pull request.
 
 ## Usage
@@ -83,7 +90,8 @@ Known bugs are recorded as tests marked `todo`: they describe the correct behavi
 ## Notes
 
 - Very large numbers (beyond JavaScript's safe integer range) may lose precision when parsed, since the tool uses the browser's built-in `JSON.parse`.
-- Highlighting is skipped for very large outputs to keep the page responsive.
+- Inputs over 1 MB are processed in a Web Worker. The worker is made from a Blob URL, so it also starts when `index.html` is opened from disk. Where workers are not available, the same code runs on the main thread in small steps.
+- Inputs over 2 MB (or 50,000 lines) are shown read-only, because the browser's text box takes seconds to load text that size and is slow to type in. **Edit as text** still loads inputs up to 10 MB into it. Files over 256 MB are not opened.
 
 ## License
 

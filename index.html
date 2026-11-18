@@ -21,6 +21,7 @@
   </script>
   <link rel="stylesheet" href="assets/css/style.css">
   <script src="assets/js/json-tools.js" defer></script>
+  <script src="assets/js/code-view.js" defer></script>
   <script src="assets/js/app.js" defer></script>
 </head>
 <body>
@@ -111,9 +112,19 @@
           <label class="title" for="input">Input</label>
           <span id="inMeta" class="badges"></span>
         </div>
+        <div class="input-note" id="inputNote" hidden>
+          <p class="input-note-text" id="inputNoteText" role="status"></p>
+          <button id="btnEditLarge" class="btn-xs" type="button" title="Load it into the text box. At this size the text box is slow to load and to type in." hidden>Edit as text</button>
+        </div>
         <div class="pane-body">
           <div class="gutter" id="inGutter" aria-hidden="true"><div class="gutter-track" id="inGutterTrack" data-lines="1"><span class="gutter-mark" id="inGutterMark" hidden></span></div></div>
           <textarea id="input" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" placeholder="Paste or type JSON here"></textarea>
+          <div id="inputView" class="code-scroll input-view" tabindex="0" role="region" aria-label="Input (read-only)" hidden>
+            <div class="code-rows">
+              <div class="gutter" id="inViewGutter" aria-hidden="true"><div class="gutter-track" id="inViewTrack"></div><span class="gutter-mark" id="inViewMark" hidden></span></div>
+              <pre><code id="inViewCode"></code></pre>
+            </div>
+          </div>
         </div>
       </section>
       <section class="pane" aria-label="Result">
@@ -242,9 +253,15 @@
           </div>
         </div>
         <div class="pane-body">
+          <div class="job-progress" id="jobProgress" hidden>
+            <span class="job-text" id="jobText" role="status"></span>
+            <span class="job-time" id="jobTime" aria-hidden="true"></span>
+            <progress id="jobBar" max="1" aria-labelledby="jobText"></progress>
+            <button id="btnCancelJob" class="btn-xs" type="button">Cancel</button>
+          </div>
           <div id="output" class="code-scroll" tabindex="0" role="region" aria-labelledby="outTitle">
             <div class="code-rows">
-              <div class="gutter" id="outGutter" aria-hidden="true"><div class="gutter-track" id="outGutterTrack" data-lines="1"></div></div>
+              <div class="gutter" id="outGutter" aria-hidden="true"><div class="gutter-track" id="outGutterTrack"></div></div>
               <pre><code id="outCode"></code></pre>
             </div>
           </div>
