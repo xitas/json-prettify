@@ -23,7 +23,9 @@
   <script src="assets/js/json-tools.js" defer></script>
   <script src="assets/js/code-view.js" defer></script>
   <script src="assets/js/app.js" defer></script>
+  <script src="assets/js/doc-input.js" defer></script>
   <script src="assets/js/compare.js" defer></script>
+  <script src="assets/js/schema.js" defer></script>
 </head>
 <body>
 <main class="app">
@@ -300,6 +302,91 @@
         <div class="copy-toast" id="copyToast" role="status" aria-live="polite"></div>
       </section>
     </div>
+    <section class="schema-panel" id="schemaPanel" aria-labelledby="btnSchemaToggle">
+      <div class="schema-head">
+        <button id="btnSchemaToggle" class="schema-toggle" type="button" aria-expanded="false" aria-controls="schemaBody">
+          <svg class="icon chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m9 6 6 6-6 6"/></svg>
+          <span>JSON Schema</span>
+        </button>
+        <span id="schemaSummary" class="badges"></span>
+        <div class="actions">
+          <button id="btnGenSchema" class="btn-sm" type="button" title="Make a schema (draft 2020-12) that describes the current JSON">Generate schema from this JSON</button>
+        </div>
+      </div>
+      <div class="schema-body" id="schemaBody" hidden>
+        <div class="format-bar schema-bar" role="group" aria-label="Schema options">
+          <label class="check check-sm" for="schemaFormats" title="By default &quot;format&quot; is only a note, as the JSON Schema spec says. Check it for date-time, date, time, email, uri, uuid, ipv4, ipv6, hostname and regex.">
+            <input type="checkbox" id="schemaFormats"> Check formats
+          </label>
+          <label class="check check-sm" for="schemaRemember" title="Off by default, because schemas can contain private details. The schema is kept in this browser only.">
+            <input type="checkbox" id="schemaRemember" aria-describedby="schemaRememberHelp"> Remember the schema on this device
+          </label>
+          <span class="sr-only" id="schemaRememberHelp">Off by default, because schemas can contain private details. The schema is kept in this browser only.</span>
+          <button id="btnSchemaClear" class="btn-xs" type="button">Clear schema</button>
+        </div>
+        <p class="schema-named" id="schemaNamed" role="note" hidden></p>
+        <div class="schema-grid">
+          <section class="pane doc-pane" id="schemaPane" aria-label="Schema">
+            <div class="pane-head">
+              <label class="title" for="schemaInput">Schema</label>
+              <span id="schemaMeta" class="badges"></span>
+              <div class="actions">
+                <label class="btn btn-sm file-btn" for="schemaFile" title="Open a schema file (or drop one on this pane)">
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+                  <span>Open file</span>
+                  <input type="file" id="schemaFile" accept=".json,application/json,application/schema+json,text/plain">
+                </label>
+              </div>
+            </div>
+            <div class="doc-error" id="schemaError" hidden>
+              <p class="doc-error-text" id="schemaErrorText"></p>
+              <div class="doc-error-actions">
+                <button id="schemaFix" class="btn-xs btn-solid" type="button">Fix JSON</button>
+                <button id="schemaGo" class="btn-xs" type="button">Go to error</button>
+              </div>
+            </div>
+            <div class="input-note" id="schemaNote" hidden>
+              <p class="input-note-text" id="schemaNoteText" role="status"></p>
+              <button id="schemaEdit" class="btn-xs" type="button" hidden>Edit as text</button>
+            </div>
+            <div class="pane-body">
+              <div class="gutter" id="schemaGutter" aria-hidden="true"><div class="gutter-track" id="schemaTrack" data-lines="1"><span class="gutter-mark" id="schemaMark" hidden></span></div></div>
+              <textarea id="schemaInput" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" placeholder="Paste a JSON Schema here, open one, or generate one from the JSON" aria-describedby="schemaErrorText"></textarea>
+              <div id="schemaView" class="code-scroll input-view" tabindex="0" role="region" aria-label="Schema (read-only)" hidden>
+                <div class="code-rows">
+                  <div class="gutter" id="schemaViewGutter" aria-hidden="true"><div class="gutter-track" id="schemaViewTrack"></div><span class="gutter-mark" id="schemaViewMark" hidden></span></div>
+                  <pre><code id="schemaViewCode"></code></pre>
+                </div>
+              </div>
+            </div>
+          </section>
+          <section class="pane schema-results" aria-labelledby="schemaResultsTitle">
+            <div class="pane-head">
+              <h2 class="title" id="schemaResultsTitle">Problems</h2>
+              <span id="schemaCount" class="badges"></span>
+            </div>
+            <div class="schema-results-body">
+              <div class="job-progress" id="schemaProgress" hidden>
+                <span class="job-text" id="schemaProgressText" role="status"></span>
+                <progress id="schemaBar" max="1" aria-labelledby="schemaProgressText"></progress>
+                <button id="btnSchemaCancel" class="btn-xs" type="button">Cancel</button>
+              </div>
+              <ol class="schema-list" id="schemaList" aria-label="Schema problems"></ol>
+              <button id="btnSchemaMore" class="btn-xs schema-more" type="button" hidden>Show more</button>
+              <div id="schemaEmpty" class="empty" data-kind="empty">
+                <span class="empty-icon" aria-hidden="true">
+                  <svg class="icon icon-empty" viewBox="0 0 24 24" focusable="false"><path d="M8 4H7a2 2 0 0 0-2 2v4a2 2 0 0 1-2 2 2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h1M16 4h1a2 2 0 0 1 2 2v4a2 2 0 0 0 2 2 2 2 0 0 0-2 2v4a2 2 0 0 1-2 2h-1"/></svg>
+                  <svg class="icon icon-error" viewBox="0 0 24 24" focusable="false"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01"/></svg>
+                  <svg class="icon icon-same" viewBox="0 0 24 24" focusable="false"><path d="m6 12.5 4 4 8-9"/></svg>
+                </span>
+                <p class="empty-title" id="schemaEmptyTitle">No schema yet</p>
+                <p class="empty-text" id="schemaEmptyText">Paste a JSON Schema, open one, or generate one from the JSON.</p>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </section>
   </section>
 
   <section class="card compare-card" id="compareCard" aria-label="Compare" hidden>

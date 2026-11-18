@@ -22,6 +22,7 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 - **Search** the output in both views: keys, values or both, match case, whole word and regex, with next/previous, a match count and a Filter that shows only matching branches of the tree
 - **Syntax highlighting** for keys, strings, numbers, booleans and null
 - **Compare** two documents (switch at the top): the data is compared, not the text, so whitespace and key order are not changes. Each addition, removal, changed value and changed type is listed with its path, and both documents are shown side by side with the changes lined up and marked with +, − and ~ (changed strings down to the character). Arrays can be matched by position, smartly (finding inserted and removed items) or by a key such as `id`. Jump between changes with Alt + ↓ and Alt + ↑, show only the changes with a few lines of context, copy the changes as a JSON Patch (RFC 6902) or as text, or share both documents in one link
+- **JSON Schema** check (draft 2020-12 and draft-07) in a collapsible panel: the status bar says "Valid against schema" or how many errors there are, and each error has its path, a plain-English message and the schema keyword that caused it; click one to jump to the value. Repeated errors are grouped, and for anyOf / oneOf the closest option is named. "Generate schema from this JSON" makes a draft 2020-12 schema from the data. Checks run in a Web Worker with a time limit, so a very slow pattern can’t freeze the page, and references outside the schema are never downloaded. The schema is only remembered between visits if you turn that on
 - **Large files** (tested up to 50 MB): formatting and converting run in a Web Worker so the page never freezes, the Code view draws only the lines on screen, and long jobs show progress with a Cancel button. Files are read in the background with their size shown first; very large inputs are shown read-only, and typing in a large input waits for **Format** instead of re-formatting on every pause
 - **Copy** the result, **download** it as a `.json` file (a loaded `data.json` saves as `data.formatted.json` or `data.min.json`), or use it as the new input
 - **Open a file** from your device, or load a sample to try it out
@@ -39,13 +40,18 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 │       ├── json-tools.js   # Pure helpers: parsing, sorting, stats, conversions, highlighting, jobs
 │       ├── code-view.js    # Virtual Code view: draws only the rows on screen
 │       ├── compare.js      # Compare mode: two inputs, the list of changes, side-by-side view
+│       ├── doc-input.js    # The JSON input box used by Compare mode and the Schema panel
+│       ├── schema.js       # The JSON Schema panel
 │       └── app.js          # UI wiring: toolbar, input/output panes, status line, worker
 ├── scripts/
-│   └── make-large-files.mjs  # Writes big JSON files for testing (not committed)
+│   ├── make-large-files.mjs  # Writes big JSON files for testing (not committed)
+│   └── fetch-schema-suite.mjs # Downloads the official JSON Schema Test Suite (not committed)
 ├── tests/
 │   ├── json-tools.test.js  # Unit tests for json-tools.js
 │   ├── big-text.test.js    # Unit tests for the large-file helpers and the worker
-│   └── diff.test.js        # Unit tests for comparing documents (patches checked by applying them)
+│   ├── diff.test.js        # Unit tests for comparing documents (patches checked by applying them)
+│   ├── schema.test.js      # Unit tests for JSON Schema checks and schema generation
+│   └── schema-suite.test.js # Runs the official JSON Schema Test Suite
 ├── .github/workflows/
 │   └── test.yml            # Runs the tests on every push and pull request
 └── README.md
@@ -78,6 +84,8 @@ The helpers in `assets/js/json-tools.js` have unit tests that use Node's built-i
 npm ci
 npm test
 ```
+
+The official [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite) runs for draft 2020-12 and draft-07 when it is there: `npm run schema-suite` downloads a pinned commit to `test-data/schema-suite/` (git ignores it, and GitHub Actions does the same before the tests). The test prints the pass rate per keyword and the tests it skips on purpose, with the reason. Without it, those tests are skipped.
 
 To try the page with big inputs, `npm run large-files` writes 1, 5, 20 and 50 MB files (formatted and minified) to `test-data/large/`, which git ignores. Pass other sizes in MB to make those instead, for example `npm run large-files -- 2 100`.
 

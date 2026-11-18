@@ -68,6 +68,26 @@
     statusEl.setAttribute('data-state', state);
     statusEl.innerHTML = '<span class="pill">' + pill + '</span><span class="msg">' + html + '</span>' +
       (stats && stats.length ? '<span class="badges">' + badges(stats) + '</span>' : '');
+    if (schemaBadge && state === 'valid') placeSchemaBadge();
+  }
+
+  // The schema check's result in the status bar ("Valid against schema", "3 schema
+  // errors"...), set by schema.js: { state, text, title } or null. Kept when the status
+  // is redrawn.
+  var schemaBadge = null;
+  function placeSchemaBadge() {
+    var old = statusEl.querySelector('.schema-badge');
+    if (old) old.remove();
+    if (!schemaBadge || statusEl.getAttribute('data-state') !== 'valid') return;
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'schema-badge';
+    b.setAttribute('data-state', schemaBadge.state);
+    b.textContent = schemaBadge.text;
+    if (schemaBadge.title) b.title = schemaBadge.title;
+    b.addEventListener('click', function () { if (schemaHook && schemaHook.showList) schemaHook.showList(); });
+    var actions = statusEl.querySelector('.status-actions');
+    statusEl.insertBefore(b, actions);
   }
 
   function showEmpty(kind, title, text) {
@@ -465,6 +485,8 @@
       setStatus('empty', 'Ready', 'Paste or type JSON to begin.');
       showEmpty('empty', 'Nothing to format yet', 'Paste JSON into the input, open a file, or load the sample.');
       finishView('empty');
+      lastDataStatus = 'empty';
+      if (schemaHook) schemaHook.dataChanged('empty');
       return;
     }
     if (text.length <= SYNC_CHARS) {
@@ -540,6 +562,8 @@
       }
     }
     finishView(view);
+    lastDataStatus = r.status;
+    if (schemaHook) schemaHook.dataChanged(r.status);
   }
 
   // Fade in only when what is shown changes, not on every keystroke.
@@ -2279,7 +2303,7 @@
   // ---- Format / Compare ----
   // Two modes, each with its own card. The choice is remembered.
   var APP_MODE_KEY = 'json-formatter-app-mode';
-  var appMode = 'format', cmp = null, pendingCompareLink = null;
+  var appMode = 'format', cmp = null, pendingCompareLink = null, schemaHook = null, lastDataStatus = 'empty';
   var btnModeFormat = $('btnModeFormat'), btnModeCompare = $('btnModeCompare');
   function setAppMode(m, save) {
     appMode = m === 'compare' ? 'compare' : 'format';
@@ -2311,6 +2335,29 @@
     clearShareHash: clearShareHash,
     mode: function () { return appMode; },
     // compare.js registers { shown(), texts(), settings(), apply(link), dirty(link) }.
+    // ---- for schema.js ----
+    // The current input text and its version (goes up with every change).
+    inputText: function () { return inputText(); },
+    inputVersion: function () { return textVersion; },
+    // Shows a value: selects it in the Tree or Code view (JSON output) and marks its line
+    // in the input's gutter.
+    showValue: function (parts, line) {
+      if (outFormat === 'json' && lastOutput) jumpToPath(parts);
+      if (line) {
+        markErrorLine(line);
+        if (bigText !== null) bigInputView.revealLine(line);
+        else input.scrollTop = Math.max(0, (line - 4) * 24);
+      }
+    },
+    setSchemaBadge: function (badge) { schemaBadge = badge; placeSchemaBadge(); },
+    // Ends the worker (a check ran too long); a format job that was running starts again.
+    restartWorker: function () {
+      var job = running;
+      stopWorker();
+      if (job) { running = null; startJob(job.text, job.version); }
+    },
+    onPathFormat: function (f) { pathFormatSel.addEventListener('change', f); },
+    registerSchema: function (hooks) { schemaHook = hooks; hooks.dataChanged(lastDataStatus); },
     registerCompare: function (hooks) {
       cmp = hooks;
       if (pendingCompareLink) { var r = pendingCompareLink; pendingCompareLink = null; applyShared(r); }
