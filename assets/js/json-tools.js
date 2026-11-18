@@ -981,7 +981,8 @@
       if (t) next = Math.min(next, inT ? t.end : t.start);
       if (r) next = Math.min(next, inR ? r.end : r.start);
       var piece = esc(text.slice(pos, next));
-      if (inR) piece = '<mark class="m" data-i="' + r.i + '">' + piece + '</mark>';
+      // A range may name its own class (the compare view's character marks have no index).
+      if (inR) piece = '<mark class="' + (r.cls || 'm') + '"' + (r.cls && r.i < 0 ? '' : ' data-i="' + r.i + '"') + '>' + piece + '</mark>';
       if (inT) piece = '<span class="' + t.cls + '">' + piece + '</span>';
       out.push(piece);
       pos = next;
@@ -1663,6 +1664,538 @@
     });
   }
 
+  // ---- Comparing two documents ----
+  // The parsed data is compared, not the text, so whitespace and key order are not changes.
+  // One walk over both documents gives the list of changes, a JSON Patch (RFC 6902) that
+  // turns the original into the changed document, and (optionally) a side-by-side view
+  // with the changed lines lined up.
+
+  var DIFF_SAME = 0, DIFF_ADD = 1, DIFF_DEL = 2, DIFF_MOD = 3, DIFF_GAP = 4;
+
+  function jsonType(v) { return v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v; }
+  function pointerToken(k) { return String(k).replace(/~/g, '~0').replace(/\//g, '~1'); }
+  function hasOwn(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
+
+  // The same text for equal data whatever the key order (keys sorted).
+  function canonicalJson(v) {
+    if (v === null || typeof v !== 'object') return JSON.stringify(v);
+    var out = [], i;
+    if (Array.isArray(v)) {
+      for (i = 0; i < v.length; i++) out.push(canonicalJson(v[i]));
+      return '[' + out.join(',') + ']';
+    }
+    var keys = Object.keys(v).sort();
+    for (i = 0; i < keys.length; i++) out.push(JSON.stringify(keys[i]) + ':' + canonicalJson(v[keys[i]]));
+    return '{' + out.join(',') + '}';
+  }
+
+  // Longest common subsequence of two sequences of numbers, with Myers' O(ND) algorithm
+  // (common start and end trimmed first). Returns the matched index pairs [[i, j], ...] in
+  // order, or null when the sequences differ in more than maxD places.
+  function lcsPairs(A, B, maxD) {
+    var n = A.length, m = B.length, pre = 0, suf = 0, out = [], k;
+    while (pre < n && pre < m && A[pre] === B[pre]) pre++;
+    while (suf < n - pre && suf < m - pre && A[n - 1 - suf] === B[m - 1 - suf]) suf++;
+    var mid = myersPairs(A, B, pre, n - pre - suf, m - pre - suf, maxD);
+    if (mid === null) return null;
+    for (k = 0; k < pre; k++) out.push([k, k]);
+    for (k = 0; k < mid.length; k++) out.push(mid[k]);
+    for (k = 0; k < suf; k++) out.push([n - suf + k, m - suf + k]);
+    return out;
+  }
+  function myersPairs(A, B, off, N, M, maxD) {
+    var max = N + M;
+    if (!max) return [];
+    var limit = Math.min(max, maxD), o = max + 1, V = new Int32Array(2 * max + 3), trace = [];
+    for (var d = 0; d <= limit; d++) {
+      trace.push(V.slice(o - d - 1, o + d + 2));   // V after step d - 1, for k in -d-1 .. d+1
+      for (var k = -d; k <= d; k += 2) {
+        var x = k === -d || (k !== d && V[o + k - 1] < V[o + k + 1]) ? V[o + k + 1] : V[o + k - 1] + 1;
+        var y = x - k;
+        while (x < N && y < M && A[off + x] === B[off + y]) { x++; y++; }
+        V[o + k] = x;
+        if (x >= N && y >= M) return myersBack(trace, d, off, N, M);
+      }
+    }
+    return null;
+  }
+  function myersBack(trace, D, off, N, M) {
+    var x = N, y = M, pairs = [];
+    for (var d = D; d > 0; d--) {
+      var snap = trace[d], k = x - y, b = d + 1;
+      var down = k === -d || (k !== d && snap[k - 1 + b] < snap[k + 1 + b]);
+      var prevK = down ? k + 1 : k - 1, prevX = snap[prevK + b];
+      var startX = down ? prevX : prevX + 1;
+      while (x > startX) { x--; y--; pairs.push([off + x, off + y]); }
+      x = prevX;
+      y = prevX - prevK;
+    }
+    while (x > 0 && y > 0) { x--; y--; pairs.push([off + x, off + y]); }
+    return pairs.reverse();
+  }
+
+  // Character-level differences between two strings: [{ op: '=' | '-' | '+', text }].
+  // Strings too long (or too different) to compare quickly come back as one removal and
+  // one insertion. Works on code points, so surrogate pairs are never split.
+  function textDiff(a, b, limit) {
+    if (a === b) return a ? [{ op: '=', text: a }] : [];
+    var max = limit || 20000;
+    var ca = Array.from(a), cb = Array.from(b), ids = Object.create(null), next = 0;
+    var map = function (list) { return list.map(function (c) { return ids[c] === undefined ? (ids[c] = next++) : ids[c]; }); };
+    var pairs = ca.length + cb.length <= max ? lcsPairs(map(ca), map(cb), 1000) : null;
+    var out = [], push = function (op, text) {
+      if (!text) return;
+      var last = out[out.length - 1];
+      if (last && last.op === op) last.text += text; else out.push({ op: op, text: text });
+    };
+    if (!pairs) { push('-', a); push('+', b); return out; }
+    var i = 0, j = 0;
+    for (var k = 0; k <= pairs.length; k++) {
+      var pi = k < pairs.length ? pairs[k][0] : ca.length, pj = k < pairs.length ? pairs[k][1] : cb.length;
+      push('-', ca.slice(i, pi).join(''));
+      push('+', cb.slice(j, pj).join(''));
+      if (k < pairs.length) push('=', ca[pi]);
+      i = pi + 1;
+      j = pj + 1;
+    }
+    return out;
+  }
+
+  // Raw text of every number in valid JSON, by JSON Pointer (for "1 and 1.0 are different").
+  function numberTexts(text) {
+    var map = new Map();
+    walkJsonValues(text, function (parts, from, end, start) {
+      var c = text.charCodeAt(start);
+      if (c === 45 || (c >= 48 && c <= 57)) map.set(formatPath(parts, 'pointer'), text.slice(start, end));
+    });
+    return map;
+  }
+
+  /*
+   * Compares two parsed documents. options:
+   *   arrays: 'position' | 'smart' | 'key' (how array items are matched; default 'smart')
+   *   key: the key for 'key' (items are matched by its value)
+   *   ignoreOrder: with 'smart' or 'key', items that only moved are not changes
+   *   numbersByText + rawA, rawB (maps from numberTexts): 1 and 1.0 count as different
+   *   view: { indent } to also build the side-by-side view (see diffViewText)
+   *   smartLimit: most differences per array for 'smart' (above it: by position, with a note)
+   * Returns { changes: [{ op: 'add' | 'remove' | 'change' | 'type', pathA, pathB, before,
+   * after }], patch: [JSON Patch operations], counts: { added, removed, changed }, notes,
+   * view }. pathA is the path in the original (null for an addition), pathB in the changed
+   * document (null for a removal).
+   */
+  function diffJson(a, b, options) {
+    var opts = options || {}, mode = opts.arrays || 'smart', key = opts.key, ignoreOrder = !!opts.ignoreOrder;
+    var byText = !!opts.numbersByText, rawA = opts.rawA, rawB = opts.rawB;
+    var smartLimit = opts.smartLimit || 2000;
+    var changes = [], patch = [], notes = [], noted = {};
+    var counts = { added: 0, removed: 0, changed: 0 };
+    var view = opts.view ? { L: [], R: [], kind: [], ci: [], marks: [], unit: opts.view.indent === '\t' ? '\t' : new Array((+opts.view.indent || 2) + 1).join(' ') } : null;
+
+    function note(text) { if (!noted[text]) { noted[text] = true; notes.push(text); } }
+    function record(op, pa, pb, before, after) {
+      changes.push({ op: op, pathA: pa, pathB: pb, before: before, after: after });
+      if (op === 'add') counts.added++; else if (op === 'remove') counts.removed++; else counts.changed++;
+      return changes.length - 1;
+    }
+
+    // ---- The view: rows of left and right lines ----
+    function row(l, r, kind, ci) {
+      view.L.push(l); view.R.push(r); view.kind.push(kind); view.ci.push(ci);
+      return view.kind.length - 1;
+    }
+    function ind(depth) { return new Array(depth + 1).join(view.unit); }
+    function scalarText(v, raw) { return raw !== undefined ? raw : JSON.stringify(v); }
+    function lines(v, depth, prefix, comma) {
+      var t = v !== null && typeof v === 'object' ? JSON.stringify(v, null, view.unit) : JSON.stringify(v);
+      var ls = t.split('\n'), pad = ind(depth);
+      for (var i = 0; i < ls.length; i++) ls[i] = (i ? pad : pad + prefix) + ls[i];
+      ls[ls.length - 1] += comma ? ',' : '';
+      return ls;
+    }
+    function pairRows(left, right, kind, ci) {
+      var first = -1;
+      for (var i = 0; i < Math.max(left.length, right.length); i++) {
+        var r = row(i < left.length ? left[i] : null, i < right.length ? right[i] : null, kind, ci);
+        if (first < 0) first = r;
+      }
+      return first;
+    }
+
+    function rawOf(map, ptr) { return map ? map.get(ptr) : undefined; }
+
+    // x, y: the values; hasX, hasY: whether each side has one. live: the JSON Pointer of
+    // this value in the document while the patch is being applied.
+    function node(x, y, hasX, hasY, prefix, depth, commaX, commaY, pa, pb, ptrA, ptrB, live, patchRemove) {
+      var ci;
+      if (!hasY) {
+        ci = record('remove', pa, null, x);
+        if (patchRemove) patch.push({ op: 'remove', path: live });
+        if (view) pairRows(lines(x, depth, prefix, commaX), [], DIFF_DEL, ci);
+        return;
+      }
+      if (!hasX) {
+        ci = record('add', null, pb, undefined, y);
+        patch.push({ op: 'add', path: live, value: y });
+        if (view) pairRows([], lines(y, depth, prefix, commaY), DIFF_ADD, ci);
+        return;
+      }
+      var tx = jsonType(x), ty = jsonType(y);
+      if (tx !== ty) {
+        ci = record('type', pa, pb, x, y);
+        patch.push({ op: 'replace', path: live, value: y });
+        if (view) pairRows(lines(x, depth, prefix, commaX), lines(y, depth, prefix, commaY), DIFF_MOD, ci);
+        return;
+      }
+      if (tx === 'object' || tx === 'array') {
+        var empty = tx === 'object' ? !Object.keys(x).length && !Object.keys(y).length : !x.length && !y.length;
+        if (empty) {
+          if (view) row(ind(depth) + prefix + (tx === 'object' ? '{}' : '[]') + (commaX ? ',' : ''),
+            ind(depth) + prefix + (tx === 'object' ? '{}' : '[]') + (commaY ? ',' : ''), DIFF_SAME, -1);
+          return;
+        }
+        if (view) row(ind(depth) + prefix + (tx === 'object' ? '{' : '['), ind(depth) + prefix + (tx === 'object' ? '{' : '['), DIFF_SAME, -1);
+        if (tx === 'object') walkObject(x, y, depth + 1, pa, pb, ptrA, ptrB, live);
+        else walkArray(x, y, depth + 1, pa, pb, ptrA, ptrB, live);
+        if (view) row(ind(depth) + (tx === 'object' ? '}' : ']') + (commaX ? ',' : ''), ind(depth) + (tx === 'object' ? '}' : ']') + (commaY ? ',' : ''), DIFF_SAME, -1);
+        return;
+      }
+      var rx = byText ? rawOf(rawA, ptrA) : undefined, ry = byText ? rawOf(rawB, ptrB) : undefined;
+      var same = x === y && !(byText && tx === 'number' && rx !== undefined && ry !== undefined && rx !== ry);
+      var lx = view ? ind(depth) + prefix + scalarText(x, rx) + (commaX ? ',' : '') : null;
+      var ly = view ? ind(depth) + prefix + scalarText(y, ry) + (commaY ? ',' : '') : null;
+      if (same) { if (view) row(lx, ly, DIFF_SAME, -1); return; }
+      ci = record('change', pa, pb, x, y);
+      patch.push({ op: 'replace', path: live, value: y });
+      if (!view) return;
+      var r = row(lx, ly, DIFF_MOD, ci);
+      if (tx === 'string') {
+        // Character-level marks inside the changed string.
+        var base = (ind(depth) + prefix).length, segs = textDiff(x, y), ia = 0, ib = 0;
+        for (var s = 0; s < segs.length; s++) {
+          var len = segs[s].text.length;
+          if (segs[s].op === '-') view.marks.push(r, 0, base + jsonStringOffset(x, ia), base + jsonStringOffset(x, ia + len));
+          if (segs[s].op === '+') view.marks.push(r, 1, base + jsonStringOffset(y, ib), base + jsonStringOffset(y, ib + len));
+          if (segs[s].op !== '+') ia += len;
+          if (segs[s].op !== '-') ib += len;
+        }
+      }
+    }
+
+    // Object members: the original's keys in order, then the keys only in the changed one
+    // (both sides are shown in this order, so they line up).
+    function walkObject(x, y, depth, pa, pb, ptrA, ptrB, live) {
+      var keys = Object.keys(x), extra = Object.keys(y).filter(function (k) { return !hasOwn(x, k); });
+      var all = keys.concat(extra), lastX = keys.length - 1, lastY = -1;
+      for (var i = all.length - 1; i >= 0; i--) if (hasOwn(y, all[i])) { lastY = i; break; }
+      for (var k = 0; k < all.length; k++) {
+        var name = all[k], tok = '/' + pointerToken(name), hx = k < keys.length, hy = hasOwn(y, name);
+        node(hx ? x[name] : undefined, hy ? y[name] : undefined, hx, hy, JSON.stringify(name) + ': ', depth,
+          k < lastX, k < lastY, pa.concat([name]), pb.concat([name]), ptrA + tok, ptrB + tok, live + tok, true);
+      }
+    }
+
+    // Which items of two arrays are "the same item" ([[i, j], ...]) and whether those pairs
+    // keep their order.
+    function matchItems(x, y, pa) {
+      var n = x.length, m = y.length, pairs = [], i, j;
+      var mm = mode;
+      if (mm === 'key') {
+        var hasKey = function (v) { return v !== null && typeof v === 'object' && !Array.isArray(v) && hasOwn(v, key); };
+        if (!key || !x.every(hasKey) || !y.every(hasKey)) {
+          note(key ? 'Some arrays have items without "' + key + '", so they were compared smartly.' : 'No key was given, so arrays were compared smartly.');
+          mm = 'smart';
+        } else {
+          // Items with the same key value (duplicates) are matched in the order they come.
+          var seen = new Map();
+          for (i = 0; i < n; i++) { var kx = canonicalJson(x[i][key]); if (!seen.has(kx)) seen.set(kx, []); seen.get(kx).push(i); }
+          for (j = 0; j < m; j++) {
+            var list = seen.get(canonicalJson(y[j][key]));
+            if (list && list.length) pairs.push([list.shift(), j]);
+          }
+          if (!ignoreOrder) pairs = longestIncreasing(pairs);
+          return { pairs: pairs, ordered: !ignoreOrder };
+        }
+      }
+      if (mm === 'smart') {
+        var ids = new Map(), next = 0, A = new Int32Array(n), B = new Int32Array(m);
+        var id = function (v) { var c = canonicalJson(v), got = ids.get(c); if (got === undefined) { got = next++; ids.set(c, got); } return got; };
+        for (i = 0; i < n; i++) A[i] = id(x[i]);
+        for (j = 0; j < m; j++) B[j] = id(y[j]);
+        var matched;
+        if (ignoreOrder) {
+          var queues = new Map();
+          for (i = 0; i < n; i++) { if (!queues.has(A[i])) queues.set(A[i], []); queues.get(A[i]).push(i); }
+          matched = [];
+          for (j = 0; j < m; j++) { var q = queues.get(B[j]); if (q && q.length) matched.push([q.shift(), j]); }
+        } else {
+          matched = lcsPairs(A, B, smartLimit);
+          if (matched === null) {
+            note('The array at ' + (formatPath(pa, 'js') || 'the root') + ' has too many differences to match items smartly, so it was compared by position.');
+            mm = 'position';
+          }
+        }
+        if (mm === 'smart') {
+          // Items left over between matches are paired up in order: changed items.
+          var inA = new Uint8Array(n), inB = new Uint8Array(m);
+          for (var p = 0; p < matched.length; p++) { inA[matched[p][0]] = 1; inB[matched[p][1]] = 1; }
+          if (ignoreOrder) {
+            var restA = [], restB = [];
+            for (i = 0; i < n; i++) if (!inA[i]) restA.push(i);
+            for (j = 0; j < m; j++) if (!inB[j]) restB.push(j);
+            for (p = 0; p < Math.min(restA.length, restB.length); p++) matched.push([restA[p], restB[p]]);
+            return { pairs: matched, ordered: false };
+          }
+          var ia = 0, jb = 0;
+          for (p = 0; p <= matched.length; p++) {
+            var ei = p < matched.length ? matched[p][0] : n, ej = p < matched.length ? matched[p][1] : m;
+            alignGap(x, y, ia, ei, jb, ej, pairs);
+            if (p < matched.length) pairs.push(matched[p]);
+            ia = ei + 1;
+            jb = ej + 1;
+          }
+          return { pairs: pairs, ordered: true };
+        }
+      }
+      for (i = 0; i < Math.min(n, m); i++) pairs.push([i, i]);
+      return { pairs: pairs, ordered: true };
+    }
+
+    function walkArray(x, y, depth, pa, pb, ptrA, ptrB, live) {
+      var n = x.length, m = y.length, match = matchItems(x, y, pa), pairs = match.pairs, i, j, p;
+      var ofA = new Int32Array(n).fill(-1), ofB = new Int32Array(m).fill(-1);
+      for (p = 0; p < pairs.length; p++) { ofA[pairs[p][0]] = pairs[p][1]; ofB[pairs[p][1]] = pairs[p][0]; }
+      // Patch: remove what goes, from the end so the indexes stay right.
+      for (i = n - 1; i >= 0; i--) if (ofA[i] < 0) patch.push({ op: 'remove', path: live + '/' + i });
+      // The order shown: removals where they were (in order) or at the end (order ignored).
+      var entries = [];
+      if (match.ordered) {
+        var ia = 0, jb = 0;
+        for (j = 0; j <= m; j++) {
+          if (j < m && ofB[j] < 0) continue;
+          var stop = j < m ? ofB[j] : n;
+          for (; ia < stop; ia++) if (ofA[ia] < 0) entries.push([ia, -1]);
+          for (; jb < j; jb++) entries.push([-1, jb]);
+          if (j < m) { entries.push([ofB[j], j]); ia = ofB[j] + 1; jb = j + 1; }
+        }
+      } else {
+        for (j = 0; j < m; j++) entries.push([ofB[j], j]);
+        for (i = 0; i < n; i++) if (ofA[i] < 0) entries.push([i, -1]);
+      }
+      var lastX = -1, lastY = -1;
+      for (p = entries.length - 1; p >= 0; p--) { if (lastX < 0 && entries[p][0] >= 0) lastX = p; if (lastY < 0 && entries[p][1] >= 0) lastY = p; }
+      var cur = null;
+      if (!match.ordered) { cur = []; for (i = 0; i < n; i++) if (ofA[i] >= 0) cur.push(i); }
+      for (p = 0; p < entries.length; p++) {
+        i = entries[p][0];
+        j = entries[p][1];
+        if (cur && j >= 0) {
+          // Order ignored: move the matched item into place (not shown as a change).
+          if (i >= 0) {
+            var pos = cur.indexOf(i, j);
+            if (pos !== j) {
+              patch.push({ op: 'move', from: live + '/' + pos, path: live + '/' + j });
+              cur.splice(pos, 1);
+              cur.splice(j, 0, i);
+            }
+          } else cur.splice(j, 0, -1);
+        }
+        node(i >= 0 ? x[i] : undefined, j >= 0 ? y[j] : undefined, i >= 0, j >= 0, '', depth, p < lastX, p < lastY,
+          i >= 0 ? pa.concat([i]) : null, j >= 0 ? pb.concat([j]) : null, i >= 0 ? ptrA + '/' + i : null, j >= 0 ? ptrB + '/' + j : null,
+          live + '/' + (j >= 0 ? j : i), false);
+      }
+    }
+
+    node(a, b, true, true, '', 0, false, false, [], [], '', '', '', true);
+    if (view) {
+      view.kind = Uint8Array.from(view.kind);
+      view.ci = Int32Array.from(view.ci);
+    }
+    return { changes: changes, patch: patch, counts: counts, notes: notes, equal: !changes.length, view: view };
+  }
+
+  // How alike two array items are, from 0 to 1: for objects, the share of keys with equal
+  // values; other values of the same type count as half alike (so they pair up in order).
+  function itemLikeness(a, b) {
+    var ta = jsonType(a), tb = jsonType(b);
+    if (ta !== tb) return 0;
+    if (ta !== 'object') return 0.5;
+    var ka = Object.keys(a), kb = Object.keys(b), union = ka.length, same = 0;
+    for (var i = 0; i < kb.length; i++) if (!hasOwn(a, kb[i])) union++;
+    for (i = 0; i < ka.length; i++) if (hasOwn(b, ka[i]) && canonicalJson(a[ka[i]]) === canonicalJson(b[ka[i]])) same++;
+    return union ? same / union : 1;
+  }
+  // Items left between two matches (x[i0..i1) removed, y[j0..j1) added): pair the ones
+  // that are alike as "changed" items, in order (best total likeness). One on each side
+  // always pair up; big gaps are paired in order.
+  function alignGap(x, y, i0, i1, j0, j1, pairs) {
+    var n = i1 - i0, m = j1 - j0, i, j;
+    if (!n || !m) return;
+    if (n === 1 && m === 1) { pairs.push([i0, j0]); return; }
+    if (n * m > 2500) { for (i = 0; i < Math.min(n, m); i++) pairs.push([i0 + i, j0 + i]); return; }
+    var score = [], sim = [];
+    for (i = 0; i <= n; i++) { score.push(new Float64Array(m + 1)); sim.push(new Float64Array(m + 1)); }
+    for (i = 1; i <= n; i++) {
+      for (j = 1; j <= m; j++) {
+        var s = itemLikeness(x[i0 + i - 1], y[j0 + j - 1]);
+        sim[i][j] = s;
+        var best = Math.max(score[i - 1][j], score[i][j - 1]);
+        if (s >= 0.5) best = Math.max(best, score[i - 1][j - 1] + s);
+        score[i][j] = best;
+      }
+    }
+    var out = [];
+    for (i = n, j = m; i > 0 && j > 0;) {
+      if (sim[i][j] >= 0.5 && score[i][j] === score[i - 1][j - 1] + sim[i][j]) { out.push([i0 + i - 1, j0 + j - 1]); i--; j--; }
+      else if (score[i][j] === score[i - 1][j]) i--;
+      else j--;
+    }
+    for (i = out.length - 1; i >= 0; i--) pairs.push(out[i]);
+  }
+
+  // The longest run of pairs (sorted by j) whose i also increases: the matched items that
+  // keep their order.
+  function longestIncreasing(pairs) {
+    var tails = [], prev = new Int32Array(pairs.length), tailIdx = [];
+    for (var p = 0; p < pairs.length; p++) {
+      var v = pairs[p][0], lo = 0, hi = tails.length;
+      while (lo < hi) { var mid = (lo + hi) >> 1; if (tails[mid] < v) lo = mid + 1; else hi = mid; }
+      tails[lo] = v;
+      tailIdx[lo] = p;
+      prev[p] = lo ? tailIdx[lo - 1] : -1;
+    }
+    var out = [], at = tails.length ? tailIdx[tails.length - 1] : -1;
+    while (at >= 0) { out.push(pairs[at]); at = prev[at]; }
+    return out.reverse();
+  }
+
+  /*
+   * The side-by-side view as two texts, rows lined up. context: show only the changed rows
+   * and this many rows around them (unchanged parts become one "gap" row); null or
+   * undefined: everything. Returns { left, right, rows, kind (Uint8Array: 0 same, 1 added,
+   * 2 removed, 3 changed, 4 gap), ci (change index per row, -1), ln, rn (line numbers on
+   * each side, 0 for none), gap (hidden lines per gap row), marks: { left, right } ([{ start,
+   * end, cls: 'dx-del' | 'dx-add' }] in text offsets), changeRow (first row of each change) }.
+   */
+  function diffViewText(view, context, changeCount) {
+    var n = view.kind.length, keep = new Uint8Array(n), r, k;
+    if (context === null || context === undefined) keep.fill(1);
+    else {
+      for (r = 0; r < n; r++) {
+        if (view.kind[r] !== DIFF_SAME) {
+          for (k = Math.max(0, r - context); k <= Math.min(n - 1, r + context); k++) keep[k] = 1;
+        }
+      }
+    }
+    var left = [], right = [], kind = [], ci = [], ln = [], rn = [], gap = [], rowOf = new Int32Array(n).fill(-1);
+    var nl = 0, nr = 0, offL = 0, offR = 0, startL = [], startR = [];
+    var push = function (l, rr, kd, c, gl, gr, hidden) {
+      startL.push(offL); startR.push(offR);
+      left.push(l); right.push(rr); kind.push(kd); ci.push(c); ln.push(gl); rn.push(gr); gap.push(hidden);
+      offL += l.length + 1; offR += rr.length + 1;
+    };
+    for (r = 0; r < n; r++) {
+      var L = view.L[r], R = view.R[r];
+      if (L !== null) nl++;
+      if (R !== null) nr++;
+      if (keep[r]) {
+        rowOf[r] = kind.length;
+        push(L === null ? '' : L, R === null ? '' : R, view.kind[r], view.ci[r], L === null ? 0 : nl, R === null ? 0 : nr, 0);
+        continue;
+      }
+      var hidden = 0;
+      for (k = r; k < n && !keep[k]; k++) hidden++;
+      for (k = r; k < r + hidden; k++) { if (view.L[k] !== null && k > r) nl++; if (view.R[k] !== null && k > r) nr++; }
+      var label = '\u22ef ' + hidden + ' unchanged ' + (hidden === 1 ? 'line' : 'lines');
+      push(label, label, DIFF_GAP, -1, 0, 0, hidden);
+      r += hidden - 1;
+    }
+    var marks = { left: [], right: [] };
+    for (k = 0; k < view.marks.length; k += 4) {
+      var at = rowOf[view.marks[k]];
+      if (at < 0) continue;
+      if (view.marks[k + 1] === 0) marks.left.push({ start: startL[at] + view.marks[k + 2], end: startL[at] + view.marks[k + 3], cls: 'dx-del', i: -1 });
+      else marks.right.push({ start: startR[at] + view.marks[k + 2], end: startR[at] + view.marks[k + 3], cls: 'dx-add', i: -1 });
+    }
+    var changeRow = new Int32Array(changeCount || 0).fill(-1);
+    for (r = 0; r < ci.length; r++) if (ci[r] >= 0 && changeRow[ci[r]] < 0) changeRow[ci[r]] = r;
+    return {
+      left: left.join('\n'), right: right.join('\n'), rows: kind.length, kind: Uint8Array.from(kind), ci: Int32Array.from(ci),
+      ln: Uint32Array.from(ln), rn: Uint32Array.from(rn), gap: Uint32Array.from(gap), marks: marks, changeRow: changeRow
+    };
+  }
+
+  // "3 added \u00b7 2 removed \u00b7 5 changed"
+  function diffSummary(counts) {
+    return counts.added + ' added \u00b7 ' + counts.removed + ' removed \u00b7 ' + counts.changed + ' changed';
+  }
+
+  // A short, one-line view of a value for the list of changes.
+  function previewValue(v, max) {
+    var t = v === undefined ? '' : JSON.stringify(v);
+    max = max || 80;
+    if (t.length <= max) return t;
+    var cut = max - 1, c = t.charCodeAt(cut - 1);
+    if (c >= 0xd800 && c <= 0xdbff) cut--;
+    return t.slice(0, cut) + '\u2026';
+  }
+
+  // The changes as readable text, one per line, with paths in the given format.
+  function diffAsText(diff, pathFormat) {
+    var out = [diffSummary(diff.counts)], fmt = pathFormat || 'js';
+    for (var k = 0; k < diff.changes.length; k++) {
+      var c = diff.changes[k], path = formatPath(c.pathB || c.pathA, fmt) || (fmt === 'jq' ? '.' : '(root)');
+      if (c.op === 'add') out.push('+ ' + path + ': ' + JSON.stringify(c.after));
+      else if (c.op === 'remove') out.push('- ' + path + ': ' + JSON.stringify(c.before));
+      else out.push('~ ' + path + ': ' + JSON.stringify(c.before) + ' \u2192 ' + JSON.stringify(c.after) +
+        (c.op === 'type' ? ' (' + jsonType(c.before) + ' \u2192 ' + jsonType(c.after) + ')' : ''));
+    }
+    return out.join('\n') + '\n';
+  }
+
+  // The list of changes for the page: op, both paths and short previews (no full values).
+  function diffList(diff) {
+    return diff.changes.map(function (c) {
+      return { op: c.op, pathA: c.pathA, pathB: c.pathB, before: c.op === 'add' ? null : previewValue(c.before), after: c.op === 'remove' ? null : previewValue(c.after),
+        typeA: c.op === 'add' ? null : jsonType(c.before), typeB: c.op === 'remove' ? null : jsonType(c.after) };
+    });
+  }
+
+  /*
+   * Compares two texts: parses both (errors are reported per side), compares and builds the
+   * view. opts: diffJson's options plus indent, context (see diffViewText) and numbersEqual
+   * (false: 1 and 1.0 differ). Returns { status: 'ok', diff, list, counts, notes, view }
+   * or { status: 'invalid', errors: { a, b } } (each null or { message, pos, line, col })
+   * or { status: 'failed', message, deep, tooBig }.
+   */
+  function runDiff(textA, textB, opts) {
+    return diffParsed(parseSide(textA), parseSide(textB), textA, textB, opts);
+  }
+  function parseSide(text) { return /\S/.test(text) ? parseInput(text) : { status: 'empty' }; }
+  // runDiff after parsing (the worker keeps parsed sides between option changes).
+  function diffParsed(pa, pb, textA, textB, opts) {
+    var o = opts || {};
+    if (pa.status === 'failed') return pa;
+    if (pb.status === 'failed') return pb;
+    if (pa.status !== 'ok' || pb.status !== 'ok') {
+      return { status: pa.status === 'empty' || pb.status === 'empty' ? 'empty' : 'invalid',
+        errors: { a: pa.status === 'invalid' ? pa.error : null, b: pb.status === 'invalid' ? pb.error : null },
+        empty: { a: pa.status === 'empty', b: pb.status === 'empty' } };
+    }
+    try {
+      var byText = o.numbersEqual === false;
+      var diff = diffJson(pa.value, pb.value, {
+        arrays: o.arrays, key: o.key, ignoreOrder: o.ignoreOrder, smartLimit: o.smartLimit,
+        numbersByText: byText, rawA: byText ? numberTexts(textA) : null, rawB: byText ? numberTexts(textB) : null,
+        view: { indent: o.indent }
+      });
+      return { status: 'ok', diff: diff, list: diffList(diff), counts: diff.counts, notes: diff.notes, equal: diff.equal,
+        view: diffViewText(diff.view, o.context, diff.changes.length) };
+    } catch (e) {
+      return failure(e);
+    }
+  }
+
   // ---- Big texts: rows and virtual scrolling ----
   // The Code view draws only the rows on screen. A row is a line of the text, and lines
   // longer than ROW_CHARS are split into several rows so no row is too wide to draw.
@@ -1892,7 +2425,7 @@
       var k = firstRangeEndingAfter(ranges, s);
       for (; k < ranges.length && ranges[k].start < e; k++) {
         var g = ranges[k];
-        if (g.end > s) marks.push({ start: Math.max(g.start, s) - s, end: Math.min(g.end, e) - s, i: g.i });
+        if (g.end > s) marks.push({ start: Math.max(g.start, s) - s, end: Math.min(g.end, e) - s, i: g.i, cls: g.cls });
       }
     }
     return renderTokens(text.slice(s, e), tokens, marks);
@@ -2243,9 +2776,47 @@
       }
     }
 
+    // Compare mode: both sides parsed and kept by version; the last diff is kept for the
+    // view (with or without unchanged parts) and for exports.
+    var cmp = { va: null, vb: null, a: null, b: null, ta: null, tb: null, result: null };
+    function diffMessage(r) {
+      var msg = { type: 'diff', id: null, status: r.status }, transfer = [];
+      if (r.status === 'ok') {
+        msg.list = r.list; msg.counts = r.counts; msg.notes = r.notes; msg.equal = r.equal; msg.view = r.view;
+        var v = r.view;
+        transfer.push(v.kind.buffer, v.ci.buffer, v.ln.buffer, v.rn.buffer, v.gap.buffer, v.changeRow.buffer);
+      } else {
+        for (var k in r) if (k !== 'diff') msg[k] = r[k];
+      }
+      return { msg: msg, transfer: transfer };
+    }
+    function diff(msg) {
+      if (msg.a != null) { cmp.va = msg.va; cmp.ta = msg.a; cmp.a = null; }
+      if (msg.b != null) { cmp.vb = msg.vb; cmp.tb = msg.b; cmp.b = null; }
+      if (cmp.va !== msg.va || cmp.vb !== msg.vb) { post({ type: 'need-text', id: msg.id }); return; }
+      post({ type: 'progress', id: msg.id, phase: 'parse' });
+      if (!cmp.a) cmp.a = parseSide(cmp.ta);
+      if (!cmp.b) cmp.b = parseSide(cmp.tb);
+      post({ type: 'progress', id: msg.id, phase: 'compare' });
+      var r = diffParsed(cmp.a, cmp.b, cmp.ta, cmp.tb, msg.opts);
+      cmp.result = r.status === 'ok' ? r.diff : null;
+      var m = diffMessage(r);
+      m.msg.id = msg.id;
+      post(m.msg, m.transfer);
+    }
+
     return function handle(msg) {
       try {
         switch (msg.type) {
+          case 'diff': diff(msg); break;
+          case 'diffView': {
+            var dv = diffViewText(cmp.result.view, msg.context, cmp.result.changes.length);
+            post({ type: 'diffView', id: msg.id, view: dv }, [dv.kind.buffer, dv.ci.buffer, dv.ln.buffer, dv.rn.buffer, dv.gap.buffer, dv.changeRow.buffer]);
+            break;
+          }
+          case 'diffExport':
+            post({ type: 'diffExport', id: msg.id, text: msg.kind === 'patch' ? JSON.stringify(cmp.result.patch, null, 2) + '\n' : diffAsText(cmp.result, msg.pathFormat) });
+            break;
           case 'job': job(msg); break;
           case 'cancel': cancelled[msg.id] = true; break;
           case 'search': search(msg); break;
@@ -2348,7 +2919,17 @@
     runJob: runJob,
     createJobTracker: createJobTracker,
     createWorkerHandler: createWorkerHandler,
-    workerSource: workerSource
+    workerSource: workerSource,
+    canonicalJson: canonicalJson,
+    lcsPairs: lcsPairs,
+    textDiff: textDiff,
+    numberTexts: numberTexts,
+    diffJson: diffJson,
+    diffViewText: diffViewText,
+    diffSummary: diffSummary,
+    diffAsText: diffAsText,
+    diffList: diffList,
+    runDiff: runDiff
   };
 
   // Also loadable from Node for the unit tests (no effect in the browser).
