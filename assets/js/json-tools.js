@@ -1549,6 +1549,12 @@
     if (typeof s.sortKeys === 'boolean') out += '&k=' + (s.sortKeys ? 1 : 0);
     if (s.mode === 'format' || s.mode === 'minify') out += '&m=' + (s.mode === 'minify' ? 'm' : 'f');
     if (s.view === 'code' || s.view === 'tree') out += '&v=' + (s.view === 'tree' ? 't' : 'c');
+    // Compare mode
+    if (s.arrays === 'position' || s.arrays === 'smart' || s.arrays === 'key') out += '&a=' + s.arrays.charAt(0);
+    if (typeof s.key === 'string' && s.key && s.key.length <= 200) out += '&ak=' + encodeURIComponent(s.key);
+    if (typeof s.ignoreOrder === 'boolean') out += '&ao=' + (s.ignoreOrder ? 1 : 0);
+    if (typeof s.numbersEqual === 'boolean') out += '&an=' + (s.numbersEqual ? 1 : 0);
+    if (typeof s.onlyChanges === 'boolean') out += '&ah=' + (s.onlyChanges ? 1 : 0);
     return out;
   }
 
@@ -1562,8 +1568,25 @@
       else if (k === 'k' && (v === '0' || v === '1')) s.sortKeys = v === '1';
       else if (k === 'm' && (v === 'f' || v === 'm')) s.mode = v === 'm' ? 'minify' : 'format';
       else if (k === 'v' && (v === 'c' || v === 't')) s.view = v === 't' ? 'tree' : 'code';
+      else if (k === 'a' && (v === 'p' || v === 's' || v === 'k')) s.arrays = v === 'p' ? 'position' : v === 's' ? 'smart' : 'key';
+      else if (k === 'ak') {
+        var key = null;
+        try { key = decodeURIComponent(v); } catch (e) {}
+        if (key && key.length <= 200) s.key = key;
+      }
+      else if (k === 'ao' && (v === '0' || v === '1')) s.ignoreOrder = v === '1';
+      else if (k === 'an' && (v === '0' || v === '1')) s.numbersEqual = v === '1';
+      else if (k === 'ah' && (v === '0' || v === '1')) s.onlyChanges = v === '1';
     }
     return s;
+  }
+
+  // Compare links carry both documents: "<length of the original>:" then the original,
+  // then the changed document, compressed or not like single links (d1= / e1=).
+  function encodeCompareShare(original, changed, settings, options) {
+    return encodeShare(original.length + ':' + original + changed, settings, options).then(function (hash) {
+      return (hash.charAt(0) === 'j' ? 'd' : 'e') + hash.slice(1);
+    });
   }
 
   // Makes the hash part of a share link (without "#"). options.compress: true or false to
@@ -1581,14 +1604,16 @@
   // link, { ok: true, text, settings, compressed } when it opens, or { ok: false, reason }
   // with reason 'incomplete' (cut off or damaged), 'version' (made by a newer format) or
   // 'unsupported' (this browser cannot decompress it). Never throws.
+  // Compare links (d1= / e1=) resolve to { ok: true, compare: true, original, changed,
+  // settings, compressed }.
   function decodeShare(hash) {
-    var m = /^([ju])(\d+)=([^&]*)((?:&.*)?)$/.exec(String(hash || '').replace(/^#/, ''));
+    var m = /^([jude])(\d+)=([^&]*)((?:&.*)?)$/.exec(String(hash || '').replace(/^#/, ''));
     if (!m) return Promise.resolve(null);
     if (m[2] !== '1') return Promise.resolve({ ok: false, reason: 'version' });
     var fail = { ok: false, reason: 'incomplete' };
     var crc = m[3].slice(0, 8), data = m[3].charAt(8) === '.' ? base64urlDecode(m[3].slice(9)) : null;
     if (!/^[0-9a-f]{8}$/.test(crc) || !data) return Promise.resolve(fail);
-    var compressed = m[1] === 'j';
+    var compressed = m[1] === 'j' || m[1] === 'd', compare = m[1] === 'd' || m[1] === 'e';
     if (compressed && !canCompress()) return Promise.resolve({ ok: false, reason: 'unsupported' });
     var bytes;
     try {
@@ -1600,6 +1625,11 @@
       if (crc32(b) !== crc) return fail;
       var text;
       try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(b); } catch (e) { return fail; }
+      if (compare) {
+        var head = /^(0|[1-9]\d{0,9}):/.exec(text), len = head ? +head[1] : -1, rest = head ? text.slice(head[0].length) : '';
+        if (!head || len > rest.length) return fail;
+        return { ok: true, compare: true, original: rest.slice(0, len), changed: rest.slice(len), settings: parseShareSettings(m[4]), compressed: compressed };
+      }
       return { ok: true, text: text, settings: parseShareSettings(m[4]), compressed: compressed };
     }, function () { return fail; });
   }
@@ -2883,6 +2913,7 @@
     base64urlDecode: base64urlDecode,
     canCompress: canCompress,
     encodeShare: encodeShare,
+    encodeCompareShare: encodeCompareShare,
     decodeShare: decodeShare,
     parseShareSettings: parseShareSettings,
     shareLinkCheck: shareLinkCheck,

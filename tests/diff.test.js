@@ -340,6 +340,37 @@ describe('runDiff: input problems', () => {
   });
 });
 
+// ---------- share links with both documents ----------
+
+describe('compare share links', () => {
+  const pairs = [['{"a":1}', '{"a":2}'], ['', '[]'], ['12:not json', '{"x":"日本 😀"}'], ['[1,2]', '']];
+  for (const compress of [true, false]) {
+    test(`round trip (${compress ? 'compressed, d1=' : 'plain, e1='})`, async () => {
+      for (const [original, changed] of pairs) {
+        const hash = await T.encodeCompareShare(original, changed, { arrays: 'key', key: 'id & "x"', ignoreOrder: true, numbersEqual: false, onlyChanges: true, indent: '4' }, { compress });
+        assert.match(hash, compress ? /^d1=[0-9a-f]{8}\./ : /^e1=[0-9a-f]{8}\./);
+        const r = await T.decodeShare('#' + hash);
+        assert.equal(r.ok, true);
+        assert.equal(r.compare, true);
+        assert.equal(r.original, original);
+        assert.equal(r.changed, changed);
+        assert.deepEqual(r.settings, { indent: '4', arrays: 'key', key: 'id & "x"', ignoreOrder: true, numbersEqual: false, onlyChanges: true });
+      }
+    });
+  }
+  test('damaged or cut links are refused; unknown settings are ignored', async () => {
+    const hash = await T.encodeCompareShare('{"a":1}', '{"a":2}', {}, { compress: false });
+    assert.deepEqual(await T.decodeShare(hash.slice(0, -3)), { ok: false, reason: 'incomplete' });
+    assert.deepEqual(await T.decodeShare(hash.replace(/^e1/, 'e2')), { ok: false, reason: 'version' });
+    // A length header longer than the text is refused even with a correct checksum.
+    const bytes = new TextEncoder().encode('99:{}');
+    const forged = 'e1=' + T.crc32(bytes) + '.' + T.base64urlEncode(bytes);
+    assert.deepEqual(await T.decodeShare(forged), { ok: false, reason: 'incomplete' });
+    const r = await T.decodeShare(hash + '&a=zzz&ak=' + 'k'.repeat(300) + '&ao=yes&evil=<script>');
+    assert.deepEqual(r.settings, {});
+  });
+});
+
 // ---------- the worker's compare messages ----------
 
 describe('createWorkerHandler: compare', () => {
