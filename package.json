@@ -3,7 +3,8 @@
   "private": true,
   "description": "Browser-only JSON formatter. These packages are only used by the tests; the page loads nothing from npm.",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "large-files": "node scripts/make-large-files.mjs"
   },
   "devDependencies": {
     "typescript": "5.9.3",

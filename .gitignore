@@ -3,3 +3,4 @@ CLAUDE.md
 commit-msg.txt
 .claude/
 node_modules/
+test-data/large/
