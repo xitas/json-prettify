@@ -338,7 +338,7 @@
     progressTimer = setTimeout(function () {
       if (!running || running.id !== id) return;
       // A job that takes a while: the status bar says so, instead of describing the old result.
-      setStatus('empty', 'Working', lastOutput ? 'The result below is out of date until this finishes.' : 'Working on the input…');
+      setStatus('empty', 'Working', lastOutput ? 'The result below is out of date until this finishes.' : 'Working on the input\u2026');
       jobProgressTick();
     }, PROGRESS_DELAY);
   }
@@ -736,6 +736,7 @@
   inputView.addEventListener('keydown', formatShortcut);
   // Ctrl/Cmd + Shift + Enter: Fix JSON (only when the input is invalid).
   document.addEventListener('keydown', function (e) {
+    if (appMode === 'compare') return;   // Compare mode has its own inputs
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Enter') {
       e.preventDefault();
       clearTimeout(timer);
@@ -2054,6 +2055,7 @@
   // browser's own find works as usual); / opens it when not typing in a field.
   document.addEventListener('keydown', function (e) {
     var a = document.activeElement;
+    if (appMode === 'compare') return;
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'f' || e.key === 'F')) {
       if (outputPane.contains(a)) { e.preventDefault(); openSearch(); }
       return;
@@ -2119,13 +2121,15 @@
 
   // ---- Share link ----
   // The input text (and the current settings) go into the link's hash, compressed. Browsers
-  // never send the hash to a server, so nothing is uploaded.
+  // never send the hash to a server, so nothing is uploaded. In Compare mode the link holds
+  // both documents (compare.js gives them and applies opened links).
   var SHARE_NOTE_KEY = 'json-formatter-share-note-seen';
   var SITE_URL = 'https://xitas.github.io/json-prettify/';
   var PRIVACY_NOTE = 'Anyone with this link can see the JSON. It\u2019s stored in the link, not on a server.';
   var btnShare = $('btnShare'), sharePanel = $('sharePanel'), shareMsg = $('shareMsg'), shareActions = $('shareActions');
   var sharedText = null;   // the input as opened from a share link, while its hash is in the address bar
   var inputDirty = false;  // the input holds the user's own JSON (typed, pasted or opened)
+  var SHARE_HASH = /^#[jude]\d+=/;
 
   // Opened from disk, a link to the local file would not work for anyone else.
   function shareBase() {
@@ -2133,26 +2137,33 @@
   }
   function clearShareHash() {
     sharedText = null;
-    if (/^#[ju]\d+=/.test(location.hash)) history.replaceState(null, '', location.pathname + location.search);
+    if (SHARE_HASH.test(location.hash)) history.replaceState(null, '', location.pathname + location.search);
   }
 
+  // The share message panel of the mode showing (and where focus goes back to).
+  function sharePlace() {
+    return appMode === 'compare'
+      ? { box: $('cmpSharePanel'), msg: $('cmpShareMsg'), actions: $('cmpShareActions'), back: $('btnCmpShare') }
+      : { box: sharePanel, msg: shareMsg, actions: shareActions, back: btnMore };
+  }
   // Messages and choices about sharing, under the output header. Text only (no HTML).
   function showSharePanel(paragraphs, buttons, focusFirst) {
-    shareMsg.textContent = '';
-    for (var i = 0; i < paragraphs.length; i++) shareMsg.appendChild(el('p', null, paragraphs[i]));
-    shareActions.textContent = '';
+    var p = sharePlace();
+    p.msg.textContent = '';
+    for (var i = 0; i < paragraphs.length; i++) p.msg.appendChild(el('p', null, paragraphs[i]));
+    p.actions.textContent = '';
     for (var k = 0; k < buttons.length; k++) {
-      var b = shareActions.appendChild(el('button', 'btn-xs' + (buttons[k].solid ? ' btn-solid' : ''), buttons[k].label));
+      var b = p.actions.appendChild(el('button', 'btn-xs' + (buttons[k].solid ? ' btn-solid' : ''), buttons[k].label));
       b.type = 'button';
       b.addEventListener('click', buttons[k].onClick);
     }
-    sharePanel.hidden = false;
-    if (focusFirst && shareActions.firstElementChild) shareActions.firstElementChild.focus();
+    p.box.hidden = false;
+    if (focusFirst && p.actions.firstElementChild) p.actions.firstElementChild.focus();
   }
   function hideSharePanel() {
-    var hadFocus = sharePanel.contains(document.activeElement);
-    sharePanel.hidden = true;
-    if (hadFocus) btnMore.focus();
+    var p = sharePlace(), hadFocus = p.box.contains(document.activeElement);
+    p.box.hidden = true;
+    if (hadFocus) p.back.focus();
   }
   var dismiss = { label: 'Got it', onClick: function () { hideSharePanel(); } };
 
@@ -2161,24 +2172,29 @@
   }
 
   function shareLink() {
-    if (!lastOutput) return;
-    var settings = { indent: indentSel.value, sortKeys: sortBox.checked, mode: mode, view: outView };
-    var text = inputText();
-    if (text.length > 20 * T.SHARE_MAX_LENGTH) {
+    var compare = appMode === 'compare' && cmp;
+    if (!compare && !lastOutput) return;
+    var texts = compare ? cmp.texts() : null, text = compare ? null : inputText();
+    var size0 = compare ? texts.original.length + texts.changed.length : text.length;
+    var button = compare ? $('btnCmpShare') : btnShare;
+    var instead = compare
+      ? [dismiss]
+      : [{ label: 'Download instead', solid: true, onClick: function () { hideSharePanel(); downloadOutput(); } }, dismiss];
+    var insteadText = compare ? 'Send the files instead, or copy the changes as a JSON Patch.' : 'Use Download and send the file instead.';
+    if (size0 > 20 * T.SHARE_MAX_LENGTH) {
       // Far too big for a link even compressed: say so without compressing it first.
-      showSharePanel(['This JSON is too big to share by link. Use Download and send the file instead.'],
-        [{ label: 'Download instead', solid: true, onClick: function () { hideSharePanel(); downloadOutput(); } }, dismiss]);
+      showSharePanel(['This JSON is too big to share by link. ' + insteadText], instead);
       return;
     }
-    btnShare.disabled = true;
-    T.encodeShare(text, settings).then(function (hash) {
-      btnShare.disabled = !lastOutput;
+    button.disabled = true;
+    var made = compare ? T.encodeCompareShare(texts.original, texts.changed, cmp.settings())
+      : T.encodeShare(text, { indent: indentSel.value, sortKeys: sortBox.checked, mode: mode, view: outView });
+    made.then(function (hash) {
+      button.disabled = compare ? false : !lastOutput;
       var link = shareBase() + '#' + hash, size = T.shareLinkCheck(link.length);
       var chars = T.groupDigits(size.length) + ' characters';
       if (size.tooBig) {
-        showSharePanel(['This JSON is too big to share by link (' + chars + '; the limit is ' + T.groupDigits(T.SHARE_MAX_LENGTH) +
-          '). Use Download and send the file instead.'],
-          [{ label: 'Download instead', solid: true, onClick: function () { hideSharePanel(); downloadOutput(); } }, dismiss]);
+        showSharePanel(['This JSON is too big to share by link (' + chars + '; the limit is ' + T.groupDigits(T.SHARE_MAX_LENGTH) + '). ' + insteadText], instead);
         return;
       }
       var notes = [];
@@ -2188,13 +2204,13 @@
       }
       if (size.warn) {
         notes.push('This link is ' + chars + ' long. Some chat apps and email clients cut long links off, so check that it ' +
-          'arrives complete, or use Download instead.');
+          'arrives complete' + (compare ? '.' : ', or use Download instead.'));
       }
-      var after = function () { if (notes.length) showSharePanel(notes, [dismiss]); else sharePanel.hidden = true; };
+      var after = function () { if (notes.length) showSharePanel(notes, [dismiss]); else sharePlace().box.hidden = true; };
       // On phones, the system share sheet; elsewhere (or if it fails), copy the link.
       var phone = window.matchMedia && matchMedia('(pointer: coarse)').matches;
       if (phone && navigator.share) {
-        navigator.share({ title: 'JSON', url: link }).then(function () { showToast('Link shared (' + chars + ')'); after(); }, function (e) {
+        navigator.share({ title: compare ? 'JSON comparison' : 'JSON', url: link }).then(function () { showToast('Link shared (' + chars + ')'); after(); }, function (e) {
           if (e && e.name === 'AbortError') return;
           copyText(link, 'Link copied (' + chars + ')');
           after();
@@ -2204,7 +2220,7 @@
         after();
       }
     }, function () {
-      btnShare.disabled = !lastOutput;
+      button.disabled = compare ? false : !lastOutput;
       showToast('Couldn\u2019t make a link in this browser');
     });
   }
@@ -2214,6 +2230,14 @@
   // input as text and through the same escaping as typed JSON; settings are whitelisted.
   function applyShared(r) {
     var s = r.settings;
+    if (r.compare) {
+      setAppMode('compare', true);
+      if (!cmp) { pendingCompareLink = r; return; }   // compare.js has not started yet
+      cmp.apply(r);
+      showToast('Opened shared comparison');
+      return;
+    }
+    setAppMode('format', true);
     if (s.indent) indentSel.value = s.indent;
     if (typeof s.sortKeys === 'boolean') sortBox.checked = s.sortKeys;
     if (s.view) setOutView(s.view, false);
@@ -2225,29 +2249,74 @@
   }
   function openShareHash() {
     var hash = location.hash;
-    if (!/^#[ju]\d+=/.test(hash)) return;
+    if (!SHARE_HASH.test(hash)) return;
     T.decodeShare(hash).then(function (r) {
       if (!r || hash !== location.hash) return;
       if (!r.ok) {
         var why = r.reason === 'version' ? 'This link was made by a newer version of JSON Prettify. Reload the page, or ask for a new link.' :
           r.reason === 'unsupported' ? 'This browser can\u2019t open compressed links. Try a current version of Chrome, Edge, Firefox or Safari.' :
           'This link seems to be incomplete, so it can\u2019t be opened. It may have been cut off when it was sent. Ask for the full link, or for the file.';
+        if (/^#[de]/.test(hash)) setAppMode('compare', false);
         showSharePanel([why], [dismiss]);
         return;
       }
-      if (inputDirty && inputText() !== r.text) {
-        showSharePanel(['This link has shared JSON in it. Opening it replaces the JSON in the input.'], [
-          { label: 'Open shared JSON', solid: true, onClick: function () { hideSharePanel(); applyShared(r); } },
+      var dirty = r.compare ? cmp && cmp.dirty(r) : inputDirty && inputText() !== r.text;
+      if (dirty) {
+        if (r.compare) setAppMode('compare', false); else setAppMode('format', false);
+        showSharePanel([r.compare ? 'This link has two shared documents in it. Opening it replaces both inputs.' :
+          'This link has shared JSON in it. Opening it replaces the JSON in the input.'], [
+          { label: r.compare ? 'Open shared comparison' : 'Open shared JSON', solid: true, onClick: function () { hideSharePanel(); applyShared(r); } },
           { label: 'Keep my JSON', onClick: function () { hideSharePanel(); clearShareHash(); } }
         ], true);
         return;
       }
-      sharePanel.hidden = true;
+      sharePlace().box.hidden = true;
       applyShared(r);
     });
   }
   window.addEventListener('hashchange', openShareHash);
 
+  // ---- Format / Compare ----
+  // Two modes, each with its own card. The choice is remembered.
+  var APP_MODE_KEY = 'json-formatter-app-mode';
+  var appMode = 'format', cmp = null, pendingCompareLink = null;
+  var btnModeFormat = $('btnModeFormat'), btnModeCompare = $('btnModeCompare');
+  function setAppMode(m, save) {
+    appMode = m === 'compare' ? 'compare' : 'format';
+    $('formatCard').hidden = appMode !== 'format';
+    $('compareCard').hidden = appMode !== 'compare';
+    btnModeFormat.classList.toggle('active', appMode === 'format');
+    btnModeCompare.classList.toggle('active', appMode === 'compare');
+    btnModeFormat.setAttribute('aria-pressed', String(appMode === 'format'));
+    btnModeCompare.setAttribute('aria-pressed', String(appMode === 'compare'));
+    if (save) { try { localStorage.setItem(APP_MODE_KEY, appMode); } catch (e) {} }
+    if (appMode === 'compare' && cmp) cmp.shown();
+  }
+  btnModeFormat.addEventListener('click', function () { setAppMode('format', true); });
+  btnModeCompare.addEventListener('click', function () { setAppMode('compare', true); });
+
+  // What compare.js uses from here: the worker, copying and messages, the path format, the
+  // Format input, the size limits and sharing.
+  window.JsonPrettify = {
+    request: function (msg, done) { request(msg, done); },
+    stopWorker: function () { stopWorker(); },
+    copyText: copyText,
+    showToast: showToast,
+    announce: announce,
+    pathFormat: function () { return pathFormatSel.value; },
+    setPathFormat: function (v) { pathFormatSel.value = v; pathFormatSel.dispatchEvent(new Event('change')); },
+    formatInput: function () { return inputText(); },
+    sizes: { SYNC_CHARS: SYNC_CHARS, VIEW_ONLY_CHARS: VIEW_ONLY_CHARS, VIEW_ONLY_LINES: VIEW_ONLY_LINES, EDIT_MAX_CHARS: EDIT_MAX_CHARS, MAX_FILE_BYTES: MAX_FILE_BYTES },
+    share: shareLink,
+    clearShareHash: clearShareHash,
+    mode: function () { return appMode; },
+    // compare.js registers { shown(), texts(), settings(), apply(link), dirty(link) }.
+    registerCompare: function (hooks) {
+      cmp = hooks;
+      if (pendingCompareLink) { var r = pendingCompareLink; pendingCompareLink = null; applyShared(r); }
+      else if (appMode === 'compare') cmp.shown();
+    }
+  };
   // ---- Output format choice ----
   var csvBar = $('csvBar'), csvDelimiter = $('csvDelimiter'), csvProtect = $('csvProtect');
   csvDelimiter.value = csvOpts.delimiter === '\t' ? 'tab' : csvOpts.delimiter;
@@ -2313,6 +2382,7 @@
 
   // Ctrl/Cmd + S downloads the result instead of saving the page.
   document.addEventListener('keydown', function (e) {
+    if (appMode === 'compare') return;
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 's' || e.key === 'S')) {
       e.preventDefault();
       clearTimeout(timer);
@@ -2374,5 +2444,6 @@
 
   setInputText(SAMPLE);
   update();
+  try { setAppMode(localStorage.getItem(APP_MODE_KEY) === 'compare' ? 'compare' : 'format', false); } catch (e) { setAppMode('format', false); }
   openShareHash();
 })();

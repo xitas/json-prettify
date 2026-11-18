@@ -24,6 +24,7 @@
     var from = 0, to = -1, base = 0, win = null;
     var pinned = new Set();       // rows kept while a selection or a jump needs them
     var selectAll = false, markedLine = null;
+    var label = null, rowClass = null;   // optional per-row gutter labels and row classes (compare view)
 
     function rows() { return index ? index.rows : 0; }
     function viewHeight() { return scroller.clientHeight || 400; }
@@ -38,7 +39,7 @@
 
     function makeRow(r) {
       var el = document.createElement('div');
-      el.className = 'code-row';
+      el.className = 'code-row' + (rowClass ? ' ' + rowClass(r) : '');
       el.setAttribute('data-r', r);
       el.innerHTML = rowHtml(r);
       return el;
@@ -83,7 +84,7 @@
         // Remove rows no longer needed, then add the missing ones in order.
         drawn.forEach(function (el, r) {
           if ((r < a || r > b) && !keep.has(r)) { el.remove(); drawn.delete(r); }
-          else if (force && !keep.has(r)) { el.innerHTML = rowHtml(r); }
+          else if (force && !keep.has(r)) { el.innerHTML = rowHtml(r); el.className = 'code-row' + (rowClass ? ' ' + rowClass(r) : ''); }
         });
         var want = [];
         for (var r = a; r <= b; r++) want.push(r);
@@ -116,7 +117,7 @@
     function drawGutter() {
       var out = [];
       for (var r = from; r <= to; r++) {
-        out.push(index.lineStarts && T.isContinuation(index, r) ? '' : String(T.lineOfRow(index, r) + 1));
+        out.push(label ? label(r) : index.lineStarts && T.isContinuation(index, r) ? '' : String(T.lineOfRow(index, r) + 1));
       }
       track.textContent = out.join('\n');
     }
@@ -152,7 +153,7 @@
       render(false);
     }
 
-    scroller.addEventListener('scroll', function () { render(false); }, { passive: true });
+    scroller.addEventListener('scroll', function () { render(false); if (opts.onScroll) opts.onScroll(); }, { passive: true });
     scroller.addEventListener('wheel', function (e) {
       if (!win || !win.scaled || e.ctrlKey) return;
       e.preventDefault();
@@ -285,12 +286,15 @@
     return {
       // Shows a text. idx: T.rowIndex(text) (made here when left out); restartInfo and
       // scan: highlighting (T.rowRestarts and T.scannerFor), or null for plain text.
-      setText: function (t, idx, restartInfo, scan, keepScroll) {
+      // extra: { label(r), rowClass(r), marks } for the compare view.
+      setText: function (t, idx, restartInfo, scan, keepScroll, extra) {
         text = t;
+        label = extra && extra.label || null;
+        rowClass = extra && extra.rowClass || null;
         index = idx || T.rowIndex(t);
         restarts = restartInfo || null;
         scanner = scan || null;
-        ranges = null;
+        ranges = extra && extra.marks && extra.marks.length ? extra.marks : null;
         current = -1;
         selectAll = false;
         pinned.clear();
@@ -301,7 +305,7 @@
         render(true);
       },
       clear: function () {
-        text = ''; index = null; restarts = null; scanner = null; ranges = null; current = -1; markedLine = null;
+        text = ''; index = null; restarts = null; scanner = null; ranges = null; current = -1; markedLine = null; label = null; rowClass = null;
         fresh();
         track.textContent = '';
         rowsBox.style.height = '';
@@ -334,6 +338,10 @@
       },
       markLine: function (line) { markedLine = line || null; if (lineMark) placeLineMark(); },
       revealLine: function (line) { if (index) scrollToRow(T.rowOfLine(index, line - 1)); },
+      // Scrolls row r into view (a third from the top) unless it is already in view.
+      revealRow: function (r, force) { if (index && (force || !rowVisible(r))) scrollToRow(r); },
+      // Redraws the drawn rows (after row classes changed).
+      refresh: function () { if (index) render(true); },
       reveal: reveal,
       select: select,
       selectionOffsets: selectionOffsets,

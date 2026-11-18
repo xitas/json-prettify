@@ -21,6 +21,7 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 - **Output as TypeScript**: interfaces or type aliases inferred from the data, with an editable root name. Nested types get PascalCase names (`users` → `User`), identical shapes share one type, and array items are merged so missing properties become optional and mixed values become unions
 - **Search** the output in both views: keys, values or both, match case, whole word and regex, with next/previous, a match count and a Filter that shows only matching branches of the tree
 - **Syntax highlighting** for keys, strings, numbers, booleans and null
+- **Compare** two documents (switch at the top): the data is compared, not the text, so whitespace and key order are not changes. Each addition, removal, changed value and changed type is listed with its path, and both documents are shown side by side with the changes lined up and marked with +, − and ~ (changed strings down to the character). Arrays can be matched by position, smartly (finding inserted and removed items) or by a key such as `id`. Jump between changes with Alt + ↓ and Alt + ↑, show only the changes with a few lines of context, copy the changes as a JSON Patch (RFC 6902) or as text, or share both documents in one link
 - **Large files** (tested up to 50 MB): formatting and converting run in a Web Worker so the page never freezes, the Code view draws only the lines on screen, and long jobs show progress with a Cancel button. Files are read in the background with their size shown first; very large inputs are shown read-only, and typing in a large input waits for **Format** instead of re-formatting on every pause
 - **Copy** the result, **download** it as a `.json` file (a loaded `data.json` saves as `data.formatted.json` or `data.min.json`), or use it as the new input
 - **Open a file** from your device, or load a sample to try it out
@@ -37,12 +38,14 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 │   └── js/
 │       ├── json-tools.js   # Pure helpers: parsing, sorting, stats, conversions, highlighting, jobs
 │       ├── code-view.js    # Virtual Code view: draws only the rows on screen
+│       ├── compare.js      # Compare mode: two inputs, the list of changes, side-by-side view
 │       └── app.js          # UI wiring: toolbar, input/output panes, status line, worker
 ├── scripts/
 │   └── make-large-files.mjs  # Writes big JSON files for testing (not committed)
 ├── tests/
 │   ├── json-tools.test.js  # Unit tests for json-tools.js
-│   └── big-text.test.js    # Unit tests for the large-file helpers and the worker
+│   ├── big-text.test.js    # Unit tests for the large-file helpers and the worker
+│   └── diff.test.js        # Unit tests for comparing documents (patches checked by applying them)
 ├── .github/workflows/
 │   └── test.yml            # Runs the tests on every push and pull request
 └── README.md
