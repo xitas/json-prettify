@@ -3,7 +3,7 @@
  * structure stats, syntax highlighting and size formatting.
  * Exposed as window.JsonTools so it works when index.html is opened from disk.
  */
-(function (global) {
+(function jsonTools(global) {
   'use strict';
 
   // Switches unit when the rounded value would reach the next unit, so 1048575 bytes
@@ -15,8 +15,18 @@
     return (n / 1048576).toFixed(2) + ' MB';
   }
 
+  // UTF-8 size of a string, counted without making an encoded copy (outputs can be large).
+  // A lone surrogate counts as U+FFFD (3 bytes), as TextEncoder writes it.
   function byteLen(s) {
-    try { return new TextEncoder().encode(s).length; } catch (e) { return s.length; }
+    var n = s.length, bytes = n;
+    for (var i = 0; i < n; i++) {
+      var c = s.charCodeAt(i);
+      if (c < 0x80) continue;
+      if (c < 0x800) bytes += 1;
+      else if (c >= 0xd800 && c <= 0xdbff && i + 1 < n && (s.charCodeAt(i + 1) & 0xfc00) === 0xdc00) { bytes += 2; i++; }
+      else bytes += 2;
+    }
+    return bytes;
   }
 
   function esc(s) {
@@ -1125,46 +1135,55 @@
   }
 
   // Syntax tokens for YAML written by toYaml: keys, strings, numbers, booleans and null.
-  function yamlTokens(text) {
-    var tokens = [], lines = text.split('\n'), pos = 0, block = -1;
+  function yamlTokens(text) { return collectTokens(scanYaml, text, 0); }
+
+  // The YAML scanner (see "Highlighting part of a text"). It reads whole lines, so it starts
+  // at a line start; state is 0, or 1 + the indent of the block scalar the line is in.
+  // onLine(start, state) is called at the start of each line.
+  function scanYaml(text, from, to, state, emit, onLine) {
+    var pos = from, n = text.length, block = state - 1;
     function scalar(s, at) {
       if (!s) return;
       var cls = s.charAt(0) === '"' ? 's' : /^(?:null|~)$/.test(s) ? 'z' : /^(?:true|false)$/.test(s) ? 'b' :
         /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][-+]?\d+)?$/.test(s) ? 'n' : /^(?:\{\}|\[\]|\|\d?[-+]?)$/.test(s) ? null : 's';
-      if (cls) tokens.push({ start: at, end: at + s.length, cls: cls });
+      if (cls) emit(at, at + s.length, cls);
     }
     function quotedEnd(s, i) {
       for (i++; i < s.length; i++) { if (s.charAt(i) === '\\') i++; else if (s.charAt(i) === '"') return i + 1; }
       return s.length;
     }
-    for (var li = 0; li < lines.length; li++) {
-      var line = lines[li], indent = /^ */.exec(line)[0].length;
+    while (pos < to) {
+      if (onLine) onLine(pos, block + 1);
+      var nl = text.indexOf('\n', pos);
+      if (nl === -1) nl = n;
+      var line = text.slice(pos, nl), indent = /^ */.exec(line)[0].length;
       if (block >= 0 && (line === '' || indent > block)) {   // inside a block scalar
-        if (line.length > indent) tokens.push({ start: pos + indent, end: pos + line.length, cls: 's' });
-        pos += line.length + 1;
-        continue;
-      }
-      block = -1;
-      var i = indent;
-      while (line.substr(i, 2) === '- ') i += 2;
-      var dashEnd = i, rest = line.slice(i), value = rest, valueAt = i;
-      if (rest.charAt(0) === '?' && rest.charAt(1) === ' ') { scalar(rest.slice(2), pos + i + 2); pos += line.length + 1; continue; }
-      if (rest.charAt(0) === ':' && (rest.length === 1 || rest.charAt(1) === ' ')) { value = rest.slice(2); valueAt = i + 2; }
-      else {
-        var keyEnd = rest.charAt(0) === '"' ? quotedEnd(rest, 0) : rest.indexOf(':');
-        if (keyEnd > 0 && rest.charAt(keyEnd) === ':' && (keyEnd + 1 === rest.length || rest.charAt(keyEnd + 1) === ' ')) {
-          tokens.push({ start: pos + i, end: pos + i + keyEnd, cls: 'k' });
-          value = rest.slice(keyEnd + 2);
-          valueAt = i + keyEnd + 2;
-        } else if (rest.charAt(0) !== '"' && keyEnd > 0 && rest.charAt(keyEnd) === ':') {
-          value = rest;
+        if (line.length > indent) emit(pos + indent, pos + line.length, 's');
+      } else {
+        block = -1;
+        var i = indent;
+        while (line.substr(i, 2) === '- ') i += 2;
+        var dashEnd = i, rest = line.slice(i), value = rest, valueAt = i;
+        if (rest.charAt(0) === '?' && rest.charAt(1) === ' ') scalar(rest.slice(2), pos + i + 2);
+        else {
+          if (rest.charAt(0) === ':' && (rest.length === 1 || rest.charAt(1) === ' ')) { value = rest.slice(2); valueAt = i + 2; }
+          else {
+            var keyEnd = rest.charAt(0) === '"' ? quotedEnd(rest, 0) : rest.indexOf(':');
+            if (keyEnd > 0 && rest.charAt(keyEnd) === ':' && (keyEnd + 1 === rest.length || rest.charAt(keyEnd + 1) === ' ')) {
+              emit(pos + i, pos + i + keyEnd, 'k');
+              value = rest.slice(keyEnd + 2);
+              valueAt = i + keyEnd + 2;
+            } else if (rest.charAt(0) !== '"' && keyEnd > 0 && rest.charAt(keyEnd) === ':') {
+              value = rest;
+            }
+          }
+          scalar(value, pos + valueAt);
+          if (/^\|\d?[-+]?$/.test(value)) block = dashEnd > indent ? dashEnd - 2 : indent;
         }
       }
-      scalar(value, pos + valueAt);
-      if (/^\|\d?[-+]?$/.test(value)) block = dashEnd > indent ? dashEnd - 2 : indent;
-      pos += line.length + 1;
+      if (nl >= n) break;
+      pos = nl + 1;
     }
-    return tokens;
   }
 
   // ---- CSV ----
@@ -1245,30 +1264,39 @@
   }
 
   // Syntax tokens for CSV: the header row as keys; numbers, booleans and text in the rows.
-  function csvTokens(text, delimiter) {
-    var tokens = [], i = 0, n = text.length, row = 0, d = delimiter || ',';
-    while (i < n) {
-      var start = i, quoted = text.charAt(i) === '"';
-      if (quoted) {
-        for (i++; i < n; i++) {
-          if (text.charAt(i) === '"') { if (text.charAt(i + 1) === '"') i++; else { i++; break; } }
+  function csvTokens(text, delimiter) { return collectTokens(csvScanner(delimiter), text, 1); }
+
+  // The CSV scanner for a delimiter (see "Highlighting part of a text"). It starts at the
+  // start of a field; state is 1 in the header record and 0 after it. onLine(start, state)
+  // is called at the start of each record.
+  function csvScanner(delimiter) {
+    var d = delimiter || ',';
+    return function scanCsv(text, from, to, state, emit, onLine) {
+      var i = from, n = text.length, header = state === 1;
+      if (onLine) onLine(from, state);
+      while (i < to) {
+        var start = i, quoted = text.charAt(i) === '"';
+        if (quoted) {
+          for (i++; i < n; i++) {
+            if (text.charAt(i) === '"') { if (text.charAt(i + 1) === '"') i++; else { i++; break; } }
+          }
+        }
+        while (i < n && text.charAt(i) !== d && text.charAt(i) !== '\r' && text.charAt(i) !== '\n') i++;
+        if (i > start) {
+          var raw = text.slice(start, i);
+          var cls = header ? 'k' : quoted ? 's' : /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][-+]?\d+)?$/.test(raw) ? 'n' :
+            raw === 'true' || raw === 'false' ? 'b' : 's';
+          emit(start, i, cls);
+        }
+        if (text.charAt(i) === d) i++;
+        else if (text.charAt(i) === '\r' || text.charAt(i) === '\n') {
+          if (text.charAt(i) === '\r' && text.charAt(i + 1) === '\n') i++;
+          i++;
+          header = false;
+          if (onLine) onLine(i, 0);
         }
       }
-      while (i < n && text.charAt(i) !== d && text.charAt(i) !== '\r' && text.charAt(i) !== '\n') i++;
-      if (i > start) {
-        var raw = text.slice(start, i);
-        var cls = row === 0 ? 'k' : quoted ? 's' : /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][-+]?\d+)?$/.test(raw) ? 'n' :
-          raw === 'true' || raw === 'false' ? 'b' : 's';
-        tokens.push({ start: start, end: i, cls: cls });
-      }
-      if (text.charAt(i) === d) i++;
-      else if (text.charAt(i) === '\r' || text.charAt(i) === '\n') {
-        if (text.charAt(i) === '\r' && text.charAt(i + 1) === '\n') i++;
-        i++;
-        row++;
-      }
-    }
-    return tokens;
+    };
   }
 
   // ---- TypeScript ----
@@ -1438,18 +1466,24 @@
   }
 
   // Highlighting for the TypeScript output: property names, keywords, type names, null.
-  function tsTokens(text) {
-    var tokens = [], re = /"(?:[^"\\\n]|\\.)*"(?=\??:)|[A-Za-z_$][A-Za-z0-9_$]*(?=\??:)|\b(?:export|interface|type)\b|\b(?:string|number|boolean|unknown|Record)\b|\bnull\b|[A-Z][A-Za-z0-9_$]*/g, m;
-    while ((m = re.exec(text))) {
-      var s = m[0];
-      var after = text.charAt(re.lastIndex);
-      var cls = after === ':' || (after === '?' && text.charAt(re.lastIndex + 1) === ':') ? 'k'
+  function tsTokens(text) { return collectTokens(scanTs, text, 0); }
+
+  // The TypeScript scanner (see "Highlighting part of a text"); it can start at any token edge.
+  var TS_TOKEN = /"(?:[^"\\\n]|\\.)*"(?=\??:)|[A-Za-z_$][A-Za-z0-9_$]*(?=\??:)|\b(?:export|interface|type)\b|\b(?:string|number|boolean|unknown|Record)\b|\bnull\b|[A-Z][A-Za-z0-9_$]*/g;
+  function scanTs(text, from, to, state, emit) {
+    var re = TS_TOKEN, m;
+    re.lastIndex = from;
+    while ((m = re.exec(text)) && m.index < to) {
+      var s = m[0], end = re.lastIndex;
+      var after = text.charAt(end);
+      var cls = after === ':' || (after === '?' && text.charAt(end + 1) === ':') ? 'k'
         : s === 'export' || s === 'interface' || s === 'type' ? 'b'
         : s === 'null' ? 'z'
         : /^[a-z]/.test(s) || s === 'Record' ? 'n' : 's';
-      tokens.push({ start: m.index, end: re.lastIndex, cls: cls });
+      emit(m.index, end, cls);
+      re.lastIndex = end;
     }
-    return tokens;
+    re.lastIndex = 0;
   }
 
   // ---- Share links ----
@@ -1629,6 +1663,619 @@
     });
   }
 
+  // ---- Big texts: rows and virtual scrolling ----
+  // The Code view draws only the rows on screen. A row is a line of the text, and lines
+  // longer than ROW_CHARS are split into several rows so no row is too wide to draw.
+
+  var ROW_CHARS = 2000;
+
+  // Rows of a text: one per line (ended by \n, \r\n or a lone \r), long lines split. The rows
+  // cover the text exactly: row r is text.slice(starts[r], starts[r + 1]), line ending
+  // included. Returns { starts (Uint32Array, rows + 1 entries), rows, lineStarts
+  // (Uint32Array, lines + 1 entries, or null when every line is one row), lines, maxRowLength }.
+  function rowIndex(text, rowChars) {
+    var max = rowChars || ROW_CHARS, n = text.length;
+    var starts = new Uint32Array(1024), rows = 0, lineStarts = new Uint32Array(1024), lines = 0, split = false, maxLen = 0;
+    var grow = function (a) { var b = new Uint32Array(a.length * 2); b.set(a); return b; };
+    var nextLf = text.indexOf('\n'), nextCr = text.indexOf('\r'), pos = 0;
+    for (;;) {
+      if (nextLf !== -1 && nextLf < pos) nextLf = text.indexOf('\n', pos);
+      if (nextCr !== -1 && nextCr < pos) nextCr = text.indexOf('\r', pos);
+      var end = nextLf === -1 ? nextCr : nextCr === -1 ? nextLf : Math.min(nextLf, nextCr);
+      var next = end === -1 ? -1 : end + (text.charCodeAt(end) === 13 && text.charCodeAt(end + 1) === 10 ? 2 : 1);
+      if (end === -1) end = n;
+      if (lines === lineStarts.length) lineStarts = grow(lineStarts);
+      lineStarts[lines++] = pos;
+      if (rows === starts.length) starts = grow(starts);
+      starts[rows++] = pos;
+      var len = end - pos;
+      if (len > max) {
+        split = true;
+        for (var prev = pos, b = pos + max; b < end; prev = b, b += max) {
+          var c = text.charCodeAt(b - 1);
+          if (c >= 0xd800 && c <= 0xdbff) b += b - 1 > prev ? -1 : 1;   // never split a surrogate pair
+          if (b >= end) break;
+          if (rows === starts.length) starts = grow(starts);
+          starts[rows++] = b;
+        }
+        len = max;
+      }
+      if (len > maxLen) maxLen = len;
+      if (next === -1) break;
+      pos = next;
+    }
+    var outStarts = new Uint32Array(rows + 1);
+    outStarts.set(starts.subarray(0, rows));
+    outStarts[rows] = n;
+    var outLines = null;
+    if (split) {
+      outLines = new Uint32Array(lines + 1);
+      outLines.set(lineStarts.subarray(0, lines));
+      outLines[lines] = n;
+    }
+    return { starts: outStarts, rows: rows, lineStarts: outLines, lines: lines, maxRowLength: maxLen };
+  }
+
+  // The last entry r (r < count) with starts[r] <= offset (binary search).
+  function lastAtOrBefore(starts, count, offset) {
+    var lo = 0, hi = count - 1;
+    while (lo < hi) {
+      var mid = (lo + hi + 1) >> 1;
+      if (starts[mid] <= offset) lo = mid; else hi = mid - 1;
+    }
+    return lo;
+  }
+  function rowOfOffset(index, offset) { return lastAtOrBefore(index.starts, index.rows, offset); }
+  // Line (0-based) that row r belongs to, and the first row of a line.
+  function lineOfRow(index, r) {
+    return index.lineStarts ? lastAtOrBefore(index.lineStarts, index.lines, index.starts[r]) : r;
+  }
+  function rowOfLine(index, line) {
+    return index.lineStarts ? rowOfOffset(index, index.lineStarts[Math.min(line, index.lines - 1)]) : Math.min(line, index.rows - 1);
+  }
+  // True for the second and later rows of a split line (the gutter shows no number there).
+  function isContinuation(index, r) {
+    return !!index.lineStarts && index.lineStarts[lineOfRow(index, r)] !== index.starts[r];
+  }
+
+  // Which rows to draw at a scroll position. Browsers limit how tall an element can be, so
+  // above maxHeight the scroll range is scaled down: the scrollbar still covers every row,
+  // and one pixel of scrolling moves more than one pixel of text. Returns { height (of the
+  // scroll content), top (the position in unscaled pixels), shift (add to an unscaled
+  // position to place it in the scroll content), first and last (the rows in view), scaled }.
+  function virtualWindow(scrollTop, viewHeight, rows, rowHeight, pad, maxHeight) {
+    var full = rows * rowHeight + 2 * pad, height = Math.min(full, maxHeight);
+    var maxScroll = Math.max(0, height - viewHeight), fullScroll = Math.max(0, full - viewHeight);
+    var s = Math.min(Math.max(0, scrollTop), maxScroll);
+    var top = full > maxHeight && maxScroll > 0 ? s / maxScroll * fullScroll : s;
+    var first = Math.min(Math.max(0, rows - 1), Math.max(0, Math.floor((top - pad) / rowHeight)));
+    var last = Math.min(Math.max(0, rows - 1), Math.max(first, Math.ceil((top + viewHeight - pad) / rowHeight) - 1));
+    return { height: height, top: top, shift: s - top, first: first, last: last, scaled: full > maxHeight };
+  }
+  // The scroll position that puts unscaled position y at the top of the view.
+  function virtualScrollTop(y, viewHeight, rows, rowHeight, pad, maxHeight) {
+    var full = rows * rowHeight + 2 * pad, height = Math.min(full, maxHeight);
+    var maxScroll = Math.max(0, height - viewHeight), fullScroll = Math.max(0, full - viewHeight);
+    var top = Math.min(Math.max(0, y), fullScroll);
+    return full > maxHeight && fullScroll > 0 ? top / fullScroll * maxScroll : top;
+  }
+
+  // ---- Highlighting part of a text ----
+  // A scanner finds the syntax tokens of one format from a restart point:
+  // scan(text, from, to, state, emit, onLine) calls emit(start, end, cls) for each token that
+  // starts before `to` (a token may end after it). state is the scanner's state at `from`;
+  // the start of a text has state 0, except CSV (1: the header record). Scanners that keep
+  // state per line call onLine(start, state) where a line or record starts.
+  // For each row, rowRestarts finds where to start scanning so its tokens come out exactly as
+  // when scanning the whole text: before a token that runs into the row, at the start of
+  // the line for YAML, with the state there.
+
+  // JSON written by JSON.stringify: strings (keys when a colon follows), numbers, true,
+  // false and null. Any token edge is a restart point.
+  var JSON_NUMBER = /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
+  function jsonStringEnd(text, i) {
+    var n = text.length, j = i + 1;
+    for (;;) {
+      var q = text.indexOf('"', j);
+      if (q === -1) return n;
+      var b = q - 1;
+      while (text.charCodeAt(b) === 92) b--;
+      if ((q - 1 - b) % 2 === 0) return q + 1;
+      j = q + 1;
+    }
+  }
+  function isWordCode(c) { return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95; }
+  function scanJson(text, from, to, state, emit) {
+    var i = from, n = text.length;
+    while (i < to) {
+      var c = text.charCodeAt(i);
+      if (c === 34) {
+        var j = jsonStringEnd(text, i), k = j;
+        while (k < n) { var w = text.charCodeAt(k); if (w === 32 || w === 9 || w === 10 || w === 13) k++; else break; }
+        emit(i, j, text.charCodeAt(k) === 58 ? 'k' : 's');
+        i = j;
+      } else if (c === 45 || (c >= 48 && c <= 57)) {
+        JSON_NUMBER.lastIndex = i;
+        var m = JSON_NUMBER.exec(text);
+        if (m) { emit(i, i + m[0].length, 'n'); i += m[0].length; } else i++;
+      } else if ((c === 116 || c === 102 || c === 110) && !isWordCode(text.charCodeAt(i - 1))) {
+        var word = c === 116 ? 'true' : c === 102 ? 'false' : 'null';
+        if (text.substr(i, word.length) === word && !isWordCode(text.charCodeAt(i + word.length))) {
+          emit(i, i + word.length, c === 110 ? 'z' : 'b');
+          i += word.length;
+        } else i++;
+      } else i++;
+    }
+  }
+
+  // The scanner for an output format (null: no highlighting). lineRestart: scanning has to
+  // start at a line start. multiline: tokens can run over a line ending.
+  function scannerFor(format, options) {
+    if (format === 'json') return { scan: scanJson, initial: 0 };
+    if (format === 'yaml') return { scan: scanYaml, initial: 0, lineRestart: true };
+    if (format === 'csv') return { scan: csvScanner(options && options.delimiter), initial: 1, multiline: true };
+    if (format === 'ts') return { scan: scanTs, initial: 0 };
+    return null;
+  }
+
+  function collectTokens(scan, text, state) {
+    var tokens = [];
+    scan(text, 0, text.length, state, function (s, e, cls) { tokens.push({ start: s, end: e, cls: cls }); });
+    return tokens;
+  }
+
+  // Restart points for the rows that cannot simply start scanning at their own start with
+  // state 0: { rows, at, state } (sorted by row; Uint32Array, Uint32Array, Int32Array).
+  function rowRestarts(scanner, text, index) {
+    var outRows = [], outAt = [], outState = [];
+    if (!scanner) return packRestarts(outRows, outAt, outState);
+    var starts = index.starts, rows = index.rows;
+    var record = function (r, at, st) {
+      if (at !== starts[r] || st !== 0) { outRows.push(r); outAt.push(at); outState.push(st); }
+    };
+    if (!scanner.multiline && !scanner.lineRestart) {
+      // Tokens never cross a line ending: only rows that continue a split line can start
+      // inside a token. Scan just those lines.
+      if (!index.lineStarts) return packRestarts(outRows, outAt, outState);
+      var ls = index.lineStarts, r = 0;
+      for (var line = 0; line < index.lines; line++) {
+        var a = ls[line], z = ls[line + 1];
+        while (r < rows && starts[r] < a) r++;           // r: the line's first row
+        if (r + 1 >= rows || starts[r + 1] >= z) continue;   // one row only
+        r++;
+        scanner.scan(text, a, z, scanner.initial, function (s, e) {
+          while (r < rows && starts[r] < z && starts[r] <= s) r++;
+          while (r < rows && starts[r] < z && starts[r] < e) { record(r, s, 0); r++; }
+        });
+      }
+      return packRestarts(outRows, outAt, outState);
+    }
+    // Scan the whole text once, following the line state.
+    var next = 0, markAt = 0, markState = scanner.initial;
+    var settle = function (upTo) {   // rows starting before upTo and not inside a token
+      while (next < rows && starts[next] < upTo) { record(next, scanner.lineRestart ? markAt : starts[next], markState); next++; }
+    };
+    scanner.scan(text, 0, text.length, scanner.initial, function (s, e) {
+      settle(s + 1);
+      while (next < rows && starts[next] < e) { record(next, scanner.lineRestart ? markAt : s, markState); next++; }
+    }, function (at, st) {
+      settle(at);
+      markAt = at;
+      markState = st;
+    });
+    settle(Infinity);
+    return packRestarts(outRows, outAt, outState);
+  }
+  function packRestarts(rows, at, state) {
+    return { rows: Uint32Array.from(rows), at: Uint32Array.from(at), state: Int32Array.from(state) };
+  }
+  function restartOf(restarts, index, r) {
+    var list = restarts && restarts.rows, count = list ? list.length : 0;
+    if (count && list[0] <= r) {
+      var k = lastAtOrBefore(list, count, r);
+      if (list[k] === r) return { at: restarts.at[k], state: restarts.state[k] };
+    }
+    return { at: index.starts[r], state: 0 };
+  }
+
+  // HTML for row r: its text with syntax tokens (when there is a scanner) and search marks
+  // (ranges: [{ start, end, i }] in text offsets, sorted; those that touch the row are used).
+  function renderRow(text, index, restarts, scanner, r, ranges) {
+    var s = index.starts[r], e = index.starts[r + 1], tokens = [], marks = [];
+    if (scanner) {
+      var from = restartOf(restarts, index, r);
+      scanner.scan(text, from.at, e, from.state, function (a, b, cls) {
+        if (b > s && a < e) tokens.push({ start: Math.max(a, s) - s, end: Math.min(b, e) - s, cls: cls });
+      });
+    }
+    if (ranges && ranges.length) {
+      var k = firstRangeEndingAfter(ranges, s);
+      for (; k < ranges.length && ranges[k].start < e; k++) {
+        var g = ranges[k];
+        if (g.end > s) marks.push({ start: Math.max(g.start, s) - s, end: Math.min(g.end, e) - s, i: g.i });
+      }
+    }
+    return renderTokens(text.slice(s, e), tokens, marks);
+  }
+  // Index of the first range (sorted by start, not overlapping) that ends after offset.
+  function firstRangeEndingAfter(ranges, offset) {
+    var lo = 0, hi = ranges.length;
+    while (lo < hi) {
+      var mid = (lo + hi) >> 1;
+      if (ranges[mid].end <= offset) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+  }
+
+  // ---- Parsing in slices ----
+  // Parses valid JSON a little at a time, so a big document can be read on the main thread
+  // without freezing the page. Runs of members up to `chunk` characters go to JSON.parse
+  // together; bigger objects and arrays are walked member by member, with their own stack.
+  // The value equals JSON.parse(text), or sortKeys(JSON.parse(text)) when sort is set.
+  // Usage: var p = createParser(text, { sort }); while (!p.step(10)) {} then p.value or p.error.
+  function createParser(text, options) {
+    var opts = options || {}, chunk = opts.chunk || 65536, sort = !!opts.sort, n = text.length;
+    var stack = [], self = { done: false, value: undefined, error: null, step: step, progress: progress };
+    var reached = 0, started = false;
+    var now = typeof performance !== 'undefined' && performance.now ? function () { return performance.now(); } : Date.now;
+
+    function ws(i) {
+      while (i < n) { var c = text.charCodeAt(i); if (c === 32 || c === 9 || c === 10 || c === 13) i++; else break; }
+      return i;
+    }
+    // End of the value starting at i, or -1 when a container runs past `limit` (or is not closed).
+    function valueEnd(i, limit) {
+      var c = text.charCodeAt(i);
+      if (c === 34) return jsonStringEnd(text, i);
+      if (c !== 123 && c !== 91) {
+        while (i < n) { c = text.charCodeAt(i); if (c === 44 || c === 93 || c === 125 || c === 58 || c === 32 || c === 9 || c === 10 || c === 13) break; i++; }
+        return i;
+      }
+      var depth = 0;
+      while (i < n) {
+        if (i > limit) return -1;
+        c = text.charCodeAt(i);
+        if (c === 34) { i = jsonStringEnd(text, i); continue; }
+        if (c === 123 || c === 91) depth++;
+        else if ((c === 125 || c === 93) && --depth === 0) return i + 1;
+        i++;
+      }
+      return -1;
+    }
+    function fail(msg) { throw new SyntaxError(msg || 'Invalid JSON'); }
+    function finishValue(v) { return sort ? sortKeys(v) : v; }
+    function sortedObject(o) {
+      var keys = Object.keys(o).sort(function (a, b) { return a < b ? -1 : a > b ? 1 : 0; }), out = {};
+      for (var i = 0; i < keys.length; i++) setKey(out, keys[i], o[keys[i]]);
+      return out;
+    }
+    function deliver(v) {
+      var parent = stack[stack.length - 1];
+      if (!parent) { self.value = v; self.done = true; return; }
+      if (parent.obj) setKey(parent.container, parent.key, v);
+      else parent.container.push(v);
+    }
+    function open(i) {   // a container too big for one piece: walk its members
+      var obj = text.charCodeAt(i) === 123;
+      stack.push({ obj: obj, container: obj ? {} : [], pos: i + 1, key: null });
+    }
+    function begin() {
+      var i = ws(0);
+      if (i >= n) fail('Unexpected end of JSON input');
+      var c = text.charCodeAt(i);
+      if (c === 123 || c === 91) {
+        var e = valueEnd(i, i + chunk);
+        if (e === -1) { open(i); return; }
+        if (ws(e) !== n) fail();
+        reached = e;
+        deliver(finishValue(JSON.parse(text.slice(i, e))));
+        return;
+      }
+      reached = n;
+      deliver(JSON.parse(text));
+    }
+    // One unit of work on the innermost open container: close it, or parse the next run of
+    // members (or open a member that is too big).
+    function work() {
+      var f = stack[stack.length - 1], p = ws(f.pos), c = text.charCodeAt(p);
+      if (p >= n) fail('Unexpected end of JSON input');
+      if (c === (f.obj ? 125 : 93)) {
+        stack.pop();
+        reached = p + 1;
+        if (!stack.length && ws(p + 1) !== n) fail();
+        deliver(f.obj && sort ? sortedObject(f.container) : f.container);
+        if (stack.length) stack[stack.length - 1].pos = p + 1;
+        return;
+      }
+      if (c === 44) {
+        if (f.started) p = ws(p + 1); else fail();
+      } else if (f.started) fail();
+      f.started = true;
+      var runStart = p, runEnd = p, q = p;
+      for (;;) {
+        var keyStart = q, v = q;
+        if (f.obj) {
+          if (text.charCodeAt(q) !== 34) fail();
+          var ke = jsonStringEnd(text, q);
+          v = ws(ke);
+          if (text.charCodeAt(v) !== 58) fail();
+          v = ws(v + 1);
+        }
+        var e = valueEnd(v, runStart + chunk);
+        if (e !== -1 && e <= v) fail();   // a missing value
+        if (e === -1 || (e - runStart > chunk && runEnd > runStart)) {
+          if (runEnd > runStart) break;   // parse the run so far; this member starts the next one
+          if (e === -1) {                 // a single member too big for one piece
+            if (f.obj) f.key = JSON.parse(text.slice(keyStart, ke));
+            f.pos = v;
+            reached = v;
+            open(v);
+            return;
+          }
+        }
+        runEnd = e;
+        q = ws(e);
+        if (text.charCodeAt(q) !== 44 || runEnd - runStart >= chunk) break;
+        q = ws(q + 1);
+        if (text.charCodeAt(q) === (f.obj ? 125 : 93)) fail();
+      }
+      var piece = JSON.parse((f.obj ? '{' : '[') + text.slice(runStart, runEnd) + (f.obj ? '}' : ']'));
+      if (f.obj) {
+        var keys = Object.keys(piece);
+        for (var k = 0; k < keys.length; k++) setKey(f.container, keys[k], finishValue(piece[keys[k]]));
+      } else {
+        for (var j = 0; j < piece.length; j++) f.container.push(finishValue(piece[j]));
+      }
+      f.pos = runEnd;
+      reached = runEnd;
+    }
+    // Works for about `ms` milliseconds; returns true when done (see .value and .error).
+    function step(ms) {
+      if (self.done) return true;
+      var t0 = now();
+      try {
+        if (!started) { started = true; begin(); }
+        while (!self.done && stack.length) {
+          work();
+          if (now() - t0 >= (ms || 10)) break;
+        }
+      } catch (e) {
+        self.error = e;
+        self.done = true;
+      }
+      return self.done;
+    }
+    function progress() { return n ? Math.min(1, reached / n) : 1; }
+    return self;
+  }
+
+  // ---- Jobs ----
+  // Everything the page does with the input, as plain functions: the same code runs in the
+  // worker, and on the main thread for small inputs (or when workers are not available).
+  // opts: { mode: 'format' | 'minify', indent: 2 | 4 | '\t', sort, format: 'json' | 'yaml' |
+  // 'csv' | 'ts', csv: { delimiter, protect }, ts: { style, rootName }, rowChars }
+
+  function isTooDeep(e) {
+    return (e && e.name === 'RangeError' && !isTooBig(e)) || /recursion|call stack|nest/i.test(String(e && e.message));
+  }
+  function isTooBig(e) {
+    return /invalid string length|allocation failed|out of memory|array buffer/i.test(String(e && e.message));
+  }
+  function failure(e, value) {
+    var out = { status: 'failed', deep: isTooDeep(e), tooBig: isTooBig(e), message: String(e && e.message || e || 'Unknown error'), depth: null };
+    if (value !== undefined) { try { out.depth = measure(value).depth; } catch (e2) {} }
+    return out;
+  }
+
+  // Parses the input: { status: 'ok', value } | { status: 'invalid', error } | failed.
+  function parseInput(text) {
+    try { return { status: 'ok', value: JSON.parse(text) }; }
+    catch (e) {
+      // Syntax errors get a location; anything else (such as Firefox's "too much recursion"
+      // on very deep input) is a failure to process valid-looking JSON.
+      if (e instanceof SyntaxError) return { status: 'invalid', error: describeError(e, text) };
+      return failure(e);
+    }
+  }
+
+  function jobIndent(opts) {
+    return opts.indent === '\t' || opts.indent === 'tab' ? '\t' : (+opts.indent || 2);
+  }
+
+  // Formats or converts a parsed value (already sorted when Sort keys is on). Returns
+  // { status: 'ok', output, ... } or { status: 'unsupported', message, ... } or failed.
+  function formatParsed(value, opts) {
+    var indent = jobIndent(opts), format = opts.format || 'json', output;
+    try {
+      if (format === 'json') {
+        output = opts.mode === 'minify' ? JSON.stringify(value) : JSON.stringify(value, null, indent);
+      } else {
+        var c = format === 'yaml' ? { text: toYaml(value, indent) } : format === 'csv' ? toCsv(value, opts.csv || {}) :
+          toTypeScript(value, { style: opts.ts && opts.ts.style, rootName: opts.ts && opts.ts.rootName, indent: indent });
+        if (c.error) return { status: 'unsupported', message: c.error, kind: kindOf(value), stats: measure(value) };
+        output = c.text;
+      }
+      var scanner = scannerFor(format, opts.csv);
+      var index = rowIndex(output, opts.rowChars);
+      return {
+        status: 'ok', output: output, outBytes: byteLen(output), kind: kindOf(value), stats: measure(value),
+        index: index, restarts: rowRestarts(scanner, output, index)
+      };
+    } catch (e) {
+      return failure(e, value);
+    }
+  }
+
+  // The whole job on one thread: parse, sort, format, index the rows.
+  function runJob(text, opts) {
+    var info = { inBytes: byteLen(text), inLines: countLines(text) };
+    var parsed = parseInput(text), out;
+    if (parsed.status !== 'ok') out = parsed;
+    else {
+      var value = parsed.value;
+      try { if (opts.sort) value = sortKeys(value); } catch (e) { out = failure(e, value); }
+      if (!out) { out = formatParsed(value, opts); out.value = value; }
+    }
+    out.inBytes = info.inBytes;
+    out.inLines = info.inLines;
+    return out;
+  }
+
+  // Keeps track of the newest job, so results of older ones can be ignored.
+  function createJobTracker() {
+    var latest = 0;
+    return {
+      start: function () { return ++latest; },
+      isCurrent: function (id) { return id === latest; },
+      cancel: function () { latest++; },
+      latest: function () { return latest; }
+    };
+  }
+
+  // A job result as a message: the typed arrays go in the transfer list, the value stays.
+  function resultMessage(id, out) {
+    var msg = { type: 'result', id: id }, transfer = [];
+    for (var k in out) if (k !== 'value' && k !== 'index' && k !== 'restarts') msg[k] = out[k];
+    if (out.index) {
+      msg.index = out.index;
+      transfer.push(out.index.starts.buffer);
+      if (out.index.lineStarts) transfer.push(out.index.lineStarts.buffer);
+    }
+    if (out.restarts) {
+      msg.restarts = out.restarts;
+      transfer.push(out.restarts.rows.buffer, out.restarts.at.buffer, out.restarts.state.buffer);
+    }
+    return { msg: msg, transfer: transfer };
+  }
+
+  /*
+   * The worker's side of the messages. post(message, transfer) sends a reply. Requests:
+   *   { type: 'job', id, version, text?, opts }  text is left out when the worker already
+   *       has this version; replies { type: 'progress', id, phase } and { type: 'result', id, ... }
+   *       ({ type: 'need-text', id } when it does not have the text)
+   *   { type: 'search', id, query, opts }        -> { type: 'search', id, matches, ranges, truncated, error }
+   *   { type: 'pathAt', id, offset }             -> { type: 'pathAt', id, path }
+   *   { type: 'rangeOf', id, parts }             -> { type: 'rangeOf', id, range }
+   *   { type: 'copyValue', id, parts, indent }   -> { type: 'copyValue', id, text }
+   *   { type: 'repair', id, text }               -> { type: 'repair', id, result }
+   *   { type: 'cancel', id }                     (sliced mode: stop that job)
+   * Errors reply { type: 'error', id, message, tooBig }. The parsed value (and its sorted
+   * copy) is kept, so changing an option does not parse the input again.
+   * options.sliced: run on the main thread instead (when workers are not available):
+   * parse in slices and pause between steps, so the page can still draw and respond.
+   */
+  function createWorkerHandler(post, options) {
+    var sliced = !!(options && options.sliced);
+    var cur = { version: null, text: null, parsed: null, sorted: null, info: null, output: null, format: null, value: undefined };
+    var cancelled = {};
+    var later = sliced ? function (f) { setTimeout(f, 0); } : function (f) { f(); };
+
+    function parseSliced(id, text, done) {
+      var p = createParser(text);
+      (function next() {
+        if (cancelled[id]) return;
+        if (!p.step(12)) { later(next); return; }
+        done(p.error ? parseInput(text) : { status: 'ok', value: p.value });
+      })();
+    }
+
+    function job(msg) {
+      var id = msg.id, opts = msg.opts || {};
+      if (msg.text != null) cur = { version: msg.version, text: msg.text, parsed: null, sorted: null, info: null, output: null, format: null, value: undefined };
+      else if (cur.version !== msg.version) { post({ type: 'need-text', id: id }); return; }
+      var steps = [
+        function (next) {
+          if (cur.parsed) { next(); return; }
+          post({ type: 'progress', id: id, phase: 'parse' });
+          cur.info = { inBytes: byteLen(cur.text), inLines: countLines(cur.text) };
+          var store = function (r) {
+            cur.parsed = r;
+            if (r.status === 'ok') cur.text = null;   // the value is enough from here on
+            next();
+          };
+          if (sliced) parseSliced(id, cur.text, store); else store(parseInput(cur.text));
+        },
+        function (next) {
+          var p = cur.parsed, out;
+          if (p.status !== 'ok') {
+            out = {};
+            for (var k in p) if (k !== 'value') out[k] = p[k];
+          } else {
+            var value = p.value;
+            if (opts.sort) {
+              post({ type: 'progress', id: id, phase: 'sort' });
+              try { value = cur.sorted || (cur.sorted = sortKeys(value)); } catch (e) { out = failure(e, value); }
+            }
+            if (!out) {
+              post({ type: 'progress', id: id, phase: opts.format && opts.format !== 'json' ? 'convert' : 'format' });
+              out = formatParsed(value, opts);
+              cur.output = out.status === 'ok' ? out.output : null;
+              cur.format = opts.format || 'json';
+              cur.value = value;
+              cur.indent = jobIndent(opts);
+            }
+          }
+          out.inBytes = cur.info.inBytes;
+          out.inLines = cur.info.inLines;
+          var m = resultMessage(id, out);
+          post(m.msg, m.transfer);
+          next();
+        }
+      ];
+      var i = 0;
+      (function run() {
+        if (cancelled[id] || i >= steps.length) return;
+        var s = steps[i++];
+        s(function () { later(run); });
+      })();
+    }
+
+    function search(msg) {
+      var opts = msg.opts || {};
+      if (cur.format === 'json') {
+        var s = createSearch(cur.value, msg.query, opts);
+        while (!s.step(100000)) { /* run to the end */ }
+        post({ type: 'search', id: msg.id, matches: s.matches, ranges: s.matches.length ? locateMatches(cur.output, s.matches) : [],
+          truncated: s.truncated, error: s.error || null });
+      } else {
+        var r = searchText(cur.output || '', msg.query, opts);
+        post({ type: 'search', id: msg.id, matches: r.matches, ranges: null, truncated: r.truncated, error: r.error || null });
+      }
+    }
+
+    return function handle(msg) {
+      try {
+        switch (msg.type) {
+          case 'job': job(msg); break;
+          case 'cancel': cancelled[msg.id] = true; break;
+          case 'search': search(msg); break;
+          case 'pathAt': post({ type: 'pathAt', id: msg.id, path: pathAtOffset(cur.output || '', msg.offset) }); break;
+          case 'rangeOf': post({ type: 'rangeOf', id: msg.id, range: rangeOfPath(cur.output || '', msg.parts) }); break;
+          case 'copyValue': {
+            var v = valueAtPath(cur.value, msg.parts);
+            post({ type: 'copyValue', id: msg.id, text: v === undefined ? null : copyValueText(v, msg.indent) });
+            break;
+          }
+          case 'repair': post({ type: 'repair', id: msg.id, result: repairJson(msg.text) }); break;
+        }
+      } catch (e) {
+        post({ type: 'error', id: msg.id, message: String(e && e.message || e), tooBig: isTooBig(e), deep: isTooDeep(e) });
+      }
+    };
+  }
+
+  // The worker's start-up code. It runs inside the worker, after this whole file.
+  function workerMain(self) {
+    var handle = self.JsonTools.createWorkerHandler(function (msg, transfer) { self.postMessage(msg, transfer || []); });
+    self.onmessage = function (e) { handle(e.data); };
+  }
+  // Source of the worker script: this file and the start-up code, for a Blob URL. Workers
+  // made from a Blob URL also start when the page is opened from disk (file://), where
+  // Chrome and Edge block loading a worker script file.
+  function workerSource() {
+    return '(' + jsonTools + ')(self);\n(' + workerMain + ')(self);\n';
+  }
+
   global.JsonTools = {
     fmtBytes: fmtBytes,
     byteLen: byteLen,
@@ -1680,7 +2327,28 @@
     countLines: countLines,
     lineNumbers: lineNumbers,
     gutterDigits: gutterDigits,
-    highlight: highlight
+    highlight: highlight,
+    ROW_CHARS: ROW_CHARS,
+    rowIndex: rowIndex,
+    rowOfOffset: rowOfOffset,
+    lineOfRow: lineOfRow,
+    rowOfLine: rowOfLine,
+    isContinuation: isContinuation,
+    virtualWindow: virtualWindow,
+    virtualScrollTop: virtualScrollTop,
+    scannerFor: scannerFor,
+    rowRestarts: rowRestarts,
+    restartOf: restartOf,
+    renderRow: renderRow,
+    createParser: createParser,
+    isTooDeep: isTooDeep,
+    isTooBig: isTooBig,
+    parseInput: parseInput,
+    formatParsed: formatParsed,
+    runJob: runJob,
+    createJobTracker: createJobTracker,
+    createWorkerHandler: createWorkerHandler,
+    workerSource: workerSource
   };
 
   // Also loadable from Node for the unit tests (no effect in the browser).

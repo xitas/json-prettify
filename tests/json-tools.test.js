@@ -33,7 +33,10 @@ test('exports every helper', () => {
     'formatPath', 'pathLabels', 'valueAtPath', 'copyValueText', 'pathAtOffset', 'rangeOfPath', 'downloadName',
     'createSearch', 'searchJson', 'jsonStringOffset', 'locateMatches', 'highlightMarked',
     'crc32', 'base64urlEncode', 'base64urlDecode', 'canCompress', 'encodeShare', 'decodeShare', 'parseShareSettings', 'shareLinkCheck',
-    'renderTokens', 'searchText', 'yamlPlain', 'toYaml', 'yamlTokens', 'toCsv', 'csvTokens', 'toTypeScript', 'tsTokens']) {
+    'renderTokens', 'searchText', 'yamlPlain', 'toYaml', 'yamlTokens', 'toCsv', 'csvTokens', 'toTypeScript', 'tsTokens',
+    'rowIndex', 'rowOfOffset', 'lineOfRow', 'rowOfLine', 'isContinuation', 'virtualWindow', 'virtualScrollTop', 'scannerFor',
+    'rowRestarts', 'restartOf', 'renderRow', 'createParser', 'isTooDeep', 'isTooBig', 'parseInput', 'formatParsed', 'runJob',
+    'createJobTracker', 'createWorkerHandler', 'workerSource']) {
     assert.equal(typeof T[name], 'function', name);
   }
 });
