@@ -6,7 +6,8 @@
     "test": "node --test",
     "large-files": "node scripts/make-large-files.mjs",
     "schema-suite": "node scripts/fetch-schema-suite.mjs",
-    "icons": "node scripts/make-icons.mjs"
+    "icons": "node scripts/make-icons.mjs",
+    "build-sw": "node scripts/build-sw.mjs"
   },
   "devDependencies": {
     "typescript": "5.9.3",

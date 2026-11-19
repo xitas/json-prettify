@@ -2258,7 +2258,7 @@
       setAppMode('compare', true);
       if (!cmp) { pendingCompareLink = r; return; }   // compare.js has not started yet
       cmp.apply(r);
-      showToast('Opened shared comparison');
+      if (!r.restore) showToast('Opened shared comparison');
       return;
     }
     setAppMode('format', true);
@@ -2360,7 +2360,12 @@
     registerSchema: function (hooks) { schemaHook = hooks; hooks.dataChanged(lastDataStatus); },
     registerCompare: function (hooks) {
       cmp = hooks;
-      if (pendingCompareLink) { var r = pendingCompareLink; pendingCompareLink = null; applyShared(r); }
+      if (pendingCompareLink) {
+        var r = pendingCompareLink;
+        pendingCompareLink = null;
+        if (r.restore) { cmp.apply(r); if (appMode === 'compare') cmp.shown(); }   // kept across an update's reload
+        else applyShared(r);
+      }
       else if (appMode === 'compare') cmp.shown();
     }
   };
@@ -2540,8 +2545,62 @@
     });
   }
 
-  setInputText(SAMPLE);
+  // ---- Offline use (service worker) ----
+  // Only over https or on this computer (localhost); opened from disk (file://) there is no
+  // service worker, quietly. sw.js keeps the app's files, so it works offline. A new
+  // version waits until the person chooses to reload: nothing reloads by itself.
+  var updateBar = $('updateBar'), waitingWorker = null, reloading = false;
+  var RESTORE_KEY = 'json-prettify-restore';
+  var canUseSw = 'serviceWorker' in navigator && (location.protocol === 'https:' || /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname));
+  function showUpdate(worker) {
+    waitingWorker = worker;
+    updateBar.hidden = false;
+  }
+  if (canUseSw) {
+    navigator.serviceWorker.register('sw.js').then(function (reg) {
+      var offer = function (w) { if (w && navigator.serviceWorker.controller) showUpdate(w); };
+      offer(reg.waiting);
+      reg.addEventListener('updatefound', function () {
+        var w = reg.installing;
+        if (w) w.addEventListener('statechange', function () { if (w.state === 'installed') offer(w); });
+      });
+      // Look for a new version now and then, and when the page comes back into view.
+      var check = function () { reg.update().catch(function () {}); };
+      setInterval(check, 30 * 60 * 1000);
+      document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') check(); });
+    }).catch(function () {});
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      if (reloading) location.reload();
+    });
+  }
+  // Reload: what is typed in is kept for this one reload (in this tab only).
+  $('btnUpdateReload').addEventListener('click', function () {
+    if (!waitingWorker) { location.reload(); return; }
+    try {
+      var keep = { mode: appMode, input: inputText().length <= 2000000 ? inputText() : null };
+      if (cmp) { var t = cmp.texts(); if (t.original.length + t.changed.length <= 2000000) keep.compare = { original: t.original, changed: t.changed, settings: cmp.settings() }; }
+      sessionStorage.setItem(RESTORE_KEY, JSON.stringify(keep));
+    } catch (e) {}
+    reloading = true;
+    waitingWorker.postMessage({ type: 'skip-waiting' });
+  });
+  $('btnUpdateLater').addEventListener('click', function () {
+    updateBar.hidden = true;
+    btnFormat.focus();
+  });
+  function restoreAfterUpdate() {
+    var kept = null;
+    try { kept = JSON.parse(sessionStorage.getItem(RESTORE_KEY) || 'null'); sessionStorage.removeItem(RESTORE_KEY); } catch (e) {}
+    if (!kept || typeof kept !== 'object') return false;
+    if (typeof kept.input === 'string') setInputText(kept.input);
+    if (kept.compare && typeof kept.compare.original === 'string' && typeof kept.compare.changed === 'string') pendingCompareLink = { ok: true, compare: true, original: kept.compare.original, changed: kept.compare.changed, settings: kept.compare.settings || {}, restore: true };
+    return kept.mode === 'compare' ? 'compare' : 'format';
+  }
+
+  var restoredMode = restoreAfterUpdate();
+  if (restoredMode === false) setInputText(SAMPLE);
   update();
-  try { setAppMode(localStorage.getItem(APP_MODE_KEY) === 'compare' ? 'compare' : 'format', false); } catch (e) { setAppMode('format', false); }
+  // (Compare texts kept across an update come back through compare.js when it starts.)
+  try { setAppMode(restoredMode || (localStorage.getItem(APP_MODE_KEY) === 'compare' ? 'compare' : 'format'), false); } catch (e) { setAppMode('format', false); }
   openShareHash();
 })();

@@ -1576,6 +1576,31 @@ pre code.hl {
   outline-offset: -6px;
 }
 
+/* ---------- A new version is available ---------- */
+.update-bar {
+  position: fixed;
+  left: 50%;
+  bottom: max(var(--space-4), env(safe-area-inset-bottom, 0px));
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  width: max-content;
+  max-width: calc(100% - 2 * var(--space-4));
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  transform: translateX(-50%);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--card-shadow);
+}
+.update-text {
+  min-width: 0;
+}
+
 /* ---------- JSON Schema panel (Format mode) ---------- */
 .schema-panel {
   border: 1px solid var(--line);

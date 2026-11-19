@@ -33,7 +33,10 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 ```
 .
 ├── index.html              # Page markup
+├── manifest.webmanifest    # App name, icons and file handler, for installing the app
+├── sw.js                   # Service worker: keeps the app's files for offline use
 ├── assets/
+│   ├── icons/              # App icons (PNG), made by scripts/make-icons.mjs
 │   ├── css/
 │   │   └── style.css       # Styles and light/dark theme tokens
 │   └── js/
@@ -44,6 +47,8 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 │       ├── schema.js       # The JSON Schema panel
 │       └── app.js          # UI wiring: toolbar, input/output panes, status line, worker
 ├── scripts/
+│   ├── build-sw.mjs          # Writes the list of cached files and their hashes into sw.js
+│   ├── make-icons.mjs        # Remakes the app icons from the logo (needs Chrome or Edge)
 │   ├── make-large-files.mjs  # Writes big JSON files for testing (not committed)
 │   └── fetch-schema-suite.mjs # Downloads the official JSON Schema Test Suite (not committed)
 ├── tests/
@@ -51,6 +56,7 @@ A simple, fast JSON formatter built with plain HTML, CSS and JavaScript. Paste y
 │   ├── big-text.test.js    # Unit tests for the large-file helpers and the worker
 │   ├── diff.test.js        # Unit tests for comparing documents (patches checked by applying them)
 │   ├── schema.test.js      # Unit tests for JSON Schema checks and schema generation
+│   ├── sw.test.js          # Fails if an app file changed without updating sw.js
 │   └── schema-suite.test.js # Runs the official JSON Schema Test Suite
 ├── .github/workflows/
 │   └── test.yml            # Runs the tests on every push and pull request
@@ -75,6 +81,21 @@ python3 -m http.server 8000
 ```
 
 Then visit `http://localhost:8000`.
+
+## Install and offline use
+
+JSON Prettify can be installed as an app, and works offline after your first visit.
+
+- **Install:** in Chrome or Edge on a computer or Android, open the **⋯** menu above the output and choose **Install app** (it only shows when the browser can install it, and not once it is installed). On iPhone and iPad, tap **Share**, then **Add to Home Screen**.
+- **Open `.json` files with it:** once installed in Chrome or Edge on a computer, choose JSON Prettify in your system's "Open with" menu for a `.json` file.
+- **Offline:** a service worker keeps the app's own files (never your JSON), so everything works without a connection: formatting, Tree, search, every output format, Compare, Schema, Share links and Download.
+- **Updates:** when a new version is published, a bar says "A new version is available." Click **Reload** to switch (what you typed is kept), or close the bar to get it next time. The page never reloads by itself.
+- **Remove the app:** in the app window, open its menu (**⋯** in the title bar) and choose **Uninstall**, or go to `chrome://apps` / `edge://apps`. On iPhone and iPad, press and hold the icon and choose **Remove App**.
+- **Clear the offline copy:** on the site, open the site settings (the icon left of the address) and choose **Delete data** or **Clear site data**, or in DevTools go to **Application → Storage → Clear site data**.
+
+The service worker only runs over https (GitHub Pages) or on `localhost`. Opened straight from disk, the page works as before, just without offline caching or installing.
+
+**After changing any app file** (the page, styles, scripts, icons or manifest), run `npm run build-sw`. It writes each file's content hash into `sw.js`, which makes a new cache version, so visitors get the change. `tests/sw.test.js` fails if you forget. `npm run icons` remakes the icons from the logo.
 
 ## Running tests
 
