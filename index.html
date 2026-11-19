@@ -5,7 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="description" content="Beautify, minify and validate JSON in your browser. Nothing is uploaded.">
   <meta name="color-scheme" content="light dark">
+  <!-- The page background of each theme (--bg in style.css), for the browser and installed app bars -->
+  <meta name="theme-color" content="#f3f3f3" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1c1c1c" media="(prefers-color-scheme: dark)">
   <title>JSON Prettify</title>
+  <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cstyle%3E.t{fill:%231f1f1f}@media (prefers-color-scheme:dark){.t{fill:%23e8e8e8}}%3C/style%3E%3Cmask id='m'%3E%3Crect width='32' height='32' fill='%23fff'/%3E%3Cg fill='none' stroke='%23000' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13 9h-.5A2.5 2.5 0 0 0 10 11.5v2A2.5 2.5 0 0 1 7.5 16 2.5 2.5 0 0 1 10 18.5v2a2.5 2.5 0 0 0 2.5 2.5h.5M19 9h.5a2.5 2.5 0 0 1 2.5 2.5v2a2.5 2.5 0 0 0 2.5 2.5 2.5 2.5 0 0 0-2.5 2.5v2a2.5 2.5 0 0 1-2.5 2.5H19'/%3E%3C/g%3E%3Ccircle cx='16' cy='16' r='2.1'/%3E%3C/mask%3E%3Crect class='t' x='1' y='1' width='30' height='30' rx='8' mask='url(%23m)'/%3E%3C/svg%3E">
   <script>
     // Set the theme before first paint: saved choice, else the system setting.
@@ -17,6 +21,14 @@
       }
       document.documentElement.setAttribute('data-theme', t);
       document.querySelector('meta[name="color-scheme"]').setAttribute('content', t);
+      // The app manifest (installing, offline use) only over http(s): opened from disk
+      // (file://) the browser can't read it and would log an error.
+      if (/^https?:$/.test(location.protocol)) {
+        var m = document.createElement('link');
+        m.rel = 'manifest';
+        m.href = 'manifest.webmanifest';
+        document.head.appendChild(m);
+      }
     })();
   </script>
   <link rel="stylesheet" href="assets/css/style.css">
@@ -172,6 +184,8 @@
                 <div class="menu-sep" role="separator"></div>
                 <button id="btnShare" role="menuitem" tabindex="-1" type="button" title="Copy a link with this JSON inside it (nothing is uploaded)"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/></svg><span>Share link</span></button>
                 <button id="btnUse" role="menuitem" tabindex="-1" type="button" title="Replace the input with this result"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 12H5M11 6l-6 6 6 6"/></svg><span>Use as input</span></button>
+                <div class="menu-sep" role="separator" id="installSep" hidden></div>
+                <button id="btnInstall" role="menuitem" tabindex="-1" type="button" title="Install JSON Prettify as an app, to open it from your desktop or home screen and use it offline" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg><span>Install app</span></button>
               </div>
             </div>
           </div>

@@ -2095,7 +2095,7 @@
   var btnMore = $('btnMore'), moreMenu = $('moreMenu');
   var btnCopyPath = $('btnCopyPath'), btnCopyValue = $('btnCopyValue');
   function menuItems() {
-    return [].slice.call(moreMenu.querySelectorAll('[role="menuitem"]')).filter(function (b) { return !b.disabled; });
+    return [].slice.call(moreMenu.querySelectorAll('[role="menuitem"]')).filter(function (b) { return !b.disabled && !b.hidden; });
   }
   function openMenu(focusLast) {
     moreMenu.hidden = false;
@@ -2467,6 +2467,10 @@
     }
     root.setAttribute('data-theme', theme);
     if (colorMeta) colorMeta.setAttribute('content', theme);
+    // The browser bar (and the installed app's title bar) follows the theme shown.
+    var bg = getComputedStyle(root).getPropertyValue('--bg').trim();
+    var bars = document.querySelectorAll('meta[name="theme-color"]');
+    for (var i = 0; i < bars.length && bg; i++) bars[i].setAttribute('content', bg);
     var label = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
     themeBtn.setAttribute('aria-label', label);
     themeBtn.title = label;
@@ -2488,6 +2492,53 @@
   }
 
   applyTheme(root.getAttribute('data-theme') === 'dark' ? 'dark' : 'light', false);
+
+  // ---- Install the app (Progressive Web App) ----
+  // "Install app" in the More menu, where the browser offers installing (beforeinstallprompt);
+  // on iPhone and iPad, which have no such prompt, a tip. Hidden once installed.
+  var btnInstall = $('btnInstall'), installSep = $('installSep'), installPrompt = null;
+  var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  function installed() {
+    return (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+  }
+  function syncInstall() {
+    var show = !installed() && (installPrompt !== null || isIOS);
+    btnInstall.hidden = installSep.hidden = !show;
+  }
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();   // our own menu item instead of the browser's banner
+    installPrompt = e;
+    syncInstall();
+  });
+  window.addEventListener('appinstalled', function () {
+    installPrompt = null;
+    syncInstall();
+    showToast('JSON Prettify is installed');
+  });
+  btnInstall.addEventListener('click', function () {
+    if (installPrompt) {
+      var prompt = installPrompt;
+      installPrompt = null;
+      prompt.prompt();
+      prompt.userChoice.then(syncInstall, syncInstall);
+      syncInstall();
+      return;
+    }
+    if (isIOS) showSharePanel(['To install JSON Prettify, tap Share, then Add to Home Screen.'], [dismiss]);
+  });
+  syncInstall();
+
+  // Opening a .json file with the installed app (desktop Chrome and Edge: file_handlers in
+  // the manifest): the file arrives through launchQueue and opens like "Open file".
+  if (window.launchQueue && typeof window.launchQueue.setConsumer === 'function') {
+    window.launchQueue.setConsumer(function (params) {
+      if (!params || !params.files || !params.files.length) return;
+      params.files[0].getFile().then(function (f) {
+        setAppMode('format', true);
+        openFile(f);
+      }, function () { showToast('Couldn\u2019t open that file'); });
+    });
+  }
 
   setInputText(SAMPLE);
   update();
