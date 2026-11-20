@@ -313,7 +313,6 @@
             <p class="empty-text" id="outEmptyText"></p>
           </div>
         </div>
-        <div class="copy-toast" id="copyToast" role="status" aria-live="polite"></div>
       </section>
     </div>
     <section class="schema-panel" id="schemaPanel" aria-labelledby="btnSchemaToggle">
@@ -591,6 +590,9 @@
     <button id="btnUpdateReload" class="btn-sm btn-solid" type="button">Reload</button>
     <button id="btnUpdateLater" class="btn-sm btn-icon" type="button" aria-label="Not now" title="Not now (the new version loads next time)"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
   </div>
+
+  <!-- Short messages ("Copied", "Swapped ..."), at the bottom of the window in both modes -->
+  <div class="copy-toast" id="copyToast" role="status" aria-live="polite"></div>
 
   <footer class="foot">
     <span class="combo"><kbd>Ctrl</kbd> + <kbd>Enter</kbd></span> formats the input,
