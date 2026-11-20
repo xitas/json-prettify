@@ -2464,6 +2464,12 @@
     } catch (e) { return null; }
   }
 
+  // Each theme's page background (--bg), as written in index.html's theme-color tags.
+  var themeBars = document.querySelectorAll('meta[name="theme-color"]'), barColors = {};
+  [].forEach.call(themeBars, function (m) {
+    barColors[/dark/.test(m.getAttribute('media') || '') ? 'dark' : 'light'] = m.getAttribute('content');
+  });
+
   function applyTheme(theme, animate) {
     if (animate && !(reduceMotion && reduceMotion.matches)) {
       root.classList.add('theme-switching');
@@ -2472,10 +2478,11 @@
     }
     root.setAttribute('data-theme', theme);
     if (colorMeta) colorMeta.setAttribute('content', theme);
-    // The browser bar (and the installed app's title bar) follows the theme shown.
-    var bg = getComputedStyle(root).getPropertyValue('--bg').trim();
-    var bars = document.querySelectorAll('meta[name="theme-color"]');
-    for (var i = 0; i < bars.length && bg; i++) bars[i].setAttribute('content', bg);
+    // The browser bar (and the installed app's title bar) follows the theme shown: both
+    // theme-color tags get this theme's color (read from the tags, not from the styles,
+    // which would make the browser work out the styles early while the page loads).
+    var color = barColors[theme];
+    for (var i = 0; i < themeBars.length && color; i++) themeBars[i].setAttribute('content', color);
     var label = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
     themeBtn.setAttribute('aria-label', label);
     themeBtn.title = label;

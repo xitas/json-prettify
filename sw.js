@@ -10,12 +10,12 @@
 'use strict';
 
 // <files> written by scripts/build-sw.mjs; do not edit by hand
-var VERSION = "ec3ca3c7fce5";
+var VERSION = "51551abf6dc6";
 var FILES = {
   "index.html": "91fc87dc160d416d",
   "manifest.webmanifest": "ac9f07dfec5bce3d",
   "assets/css/style.css": "5e01121a47706a7e",
-  "assets/js/app.js": "d957cf2b0a9eca5e",
+  "assets/js/app.js": "bf67cfb328c894ca",
   "assets/js/code-view.js": "81d2b85b5b50bc00",
   "assets/js/compare.js": "3f2268722f6bbe6a",
   "assets/js/doc-input.js": "6bd3a5f5b0d50228",

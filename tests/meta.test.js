@@ -30,6 +30,16 @@ test('link previews: Open Graph and Twitter tags, with the full image address', 
   assert.match(html, new RegExp(`<link rel="canonical" href="${SITE}">`));
 });
 
+test('the theme-color tags match each theme\'s page background (--bg in style.css)', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'assets/css/style.css'), 'utf8');
+  for (const theme of ['light', 'dark']) {
+    const block = new RegExp(`\\[data-theme="${theme}"\\][^{]*\\{([^}]*)\\}`).exec(css);
+    assert.ok(block, `no ${theme} theme block`);
+    const bg = /--bg:\s*(#[0-9a-fA-F]{3,8})/.exec(block[1])[1];
+    assert.match(html, new RegExp(`<meta name="theme-color" content="${bg}" media="\\(prefers-color-scheme: ${theme}\\)">`), theme);
+  }
+});
+
 test('og-image.png exists and is 1200 x 630', () => {
   const png = fs.readFileSync(path.join(ROOT, 'og-image.png'));
   assert.equal(png.toString('ascii', 1, 4), 'PNG');
