@@ -33,6 +33,13 @@ test('everything the page loads is in the list: scripts, styles, manifest and ic
   }
 });
 
+test('the social preview and the README images are not kept for offline use', async () => {
+  const { appFiles } = await build();
+  const files = appFiles(ROOT);
+  assert.ok(!files.includes('og-image.png'));
+  assert.ok(!files.some(f => f.startsWith('docs/')), files.join());
+});
+
 test('a changed file changes the hash and the cache version', async () => {
   const { filesBlock } = await build();
   const tmp = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'sw-test-'));
