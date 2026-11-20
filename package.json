@@ -8,7 +8,8 @@
     "schema-suite": "node scripts/fetch-schema-suite.mjs",
     "icons": "node scripts/make-icons.mjs",
     "build-sw": "node scripts/build-sw.mjs",
-    "og-image": "node scripts/make-og-image.mjs"
+    "og-image": "node scripts/make-og-image.mjs",
+    "readme-media": "node scripts/make-readme-media.mjs"
   },
   "devDependencies": {
     "typescript": "5.9.3",
